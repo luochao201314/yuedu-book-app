@@ -21,13 +21,24 @@ const PUBLIC = path.join(__dirname, '..', 'app');
 const BOOKS = path.join(__dirname, 'books.json');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
+const MAX_BODY = 16 * 1024 * 1024;   // 16MB（约 12MB 音频 base64）
+const MAX_AUDIO = 12 * 1024 * 1024;
+
 function send(res, code, obj, headers = {}) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
   res.end(JSON.stringify(obj));
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let b = ''; req.on('data', d => b += d); req.on('end', () => resolve(b)); req.on('error', reject);
+    let size = 0;
+    const chunks = [];
+    req.on('data', d => {
+      size += d.length;
+      if (size > MAX_BODY) { reject(new Error('body too large')); req.destroy(); return; }
+      chunks.push(d);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
   });
 }
 
@@ -58,47 +69,108 @@ const server = http.createServer(async (req, res) => {
     const okHost = /^https:\/\/(www\.)?gutenberg\.org\//.test(target) || /^https:\/\/(www\.)?archive\.org\//.test(target);
     if (!okHost) return send(res, 400, { error: 'only gutenberg/archive urls allowed' });
     try {
-      const gr = await fetch(target);
+      const gr = await fetch(target, { redirect: 'follow' });
+      if (!gr.ok) return send(res, 502, { error: 'gutenberg fetch failed', status: gr.status });
       const text = await gr.text();
-      return send(res, 200, { text });
+      return send(res, 200, { text: text.slice(0, 2000000) });
     } catch (e) { return send(res, 502, { error: 'gutenberg fetch failed', msg: String(e) }); }
   }
 
   // 发音评测（代理 Azure Pronunciation Assessment）
   if (u.pathname === '/api/score' && req.method === 'POST') {
-    let text, audio;
-    try { const j = JSON.parse(await readBody(req)); text = j.text; audio = j.audio; }
-    catch (e) { return send(res, 400, { error: 'bad json' }); }
+    let text, audio, language;
+    try { const j = JSON.parse(await readBody(req)); text = j.text; audio = j.audio; language = j.language; }
+    catch (e) { return send(res, 400, { error: 'bad json', msg: String(e.message || e) }); }
+
+    text = typeof text === 'string' ? text.trim() : '';
+    if (!text) return send(res, 400, { error: 'text required' });
+    if (typeof audio !== 'string' || !audio) return send(res, 400, { error: 'audio required' });
+    if (audio.length > MAX_AUDIO) return send(res, 413, { error: 'audio too large' });
+
     if (!process.env.AZURE_SPEECH_KEY) {
-      return send(res, 200, { mock: true, score: 0, words: [], fixes: ['未配置 AZURE_SPEECH_KEY，已降级为模拟评分（见 README）'] });
+      return send(res, 200, {
+        mock: true, score: 0, words: [],
+        fixes: ['服务端未配置 AZURE_SPEECH_KEY，评分不可用（不是设备问题）']
+      });
     }
+
+    const buf = Buffer.from(audio, 'base64');
+    if (buf.length < 2000) return send(res, 400, { error: 'audio too short', bytes: buf.length });
+    const isWav = buf.slice(0, 4).toString('ascii') === 'RIFF';
+    if (!isWav) return send(res, 400, { error: 'audio must be 16k mono PCM WAV' });
+
     try {
       const region = process.env.AZURE_SPEECH_REGION || 'eastasia';
-      const url = `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`;
-      const buf = Buffer.from(audio, 'base64');
+      const endpoint = process.env.AZURE_SPEECH_ENDPOINT ||
+        `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1`;
+      const url = `${endpoint}?language=${encodeURIComponent(language || 'en-US')}&format=detailed`;
+
+      // Azure 要求该头为 base64(JSON)，且 ReferenceText 必填（缺了必 400）。
+      const paCfg = Buffer.from(JSON.stringify({
+        ReferenceText: text,
+        GradingSystem: 'HundredMark',
+        Granularity: 'Word',
+        Dimension: 'Comprehensive',
+        EnableMiscue: true
+      })).toString('base64');
+
       const ar = await fetch(url, {
         method: 'POST',
         headers: {
           'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY,
           'Content-Type': 'audio/wav; codecs=audio/pcm; samplerate=16000',
-          'Pronunciation-Assessment': JSON.stringify({ GradingSystem: 'HundredMark', Granularity: 'Phoneme', Dimension: 'Comprehensive' })
+          'Pronunciation-Assessment': paCfg,
+          'Accept': 'application/json'
         },
-        body: buf
+        body: buf   // 必须发二进制，不能发 base64 字符串
       });
-      // 防御：Azure 返回非 JSON（如 400 Bad Request 文本）时，ar.json() 会抛 SyntaxError。
-      // 先读文本、判 content-type，异常时降级为友好提示而非 502。
-      const ct = ar.headers.get('content-type') || '';
+
       const raw = await ar.text();
-      if (!ar.ok || !ct.includes('json')) {
-        return send(res, 200, { mock: true, score: 0, words: [], fixes: ['Azure 返回错误：' + raw.slice(0, 120)] });
+      if (!ar.ok) {
+        console.error('[score] azure http', ar.status, raw.slice(0, 400));
+        return send(res, 502, { error: 'azure failed', status: ar.status, msg: raw.slice(0, 300) });
       }
-      const j = JSON.parse(raw);
+      let j;
+      try { j = JSON.parse(raw); }
+      catch (e) {
+        console.error('[score] azure non-json', raw.slice(0, 400));
+        return send(res, 502, { error: 'azure bad json', msg: raw.slice(0, 300) });
+      }
+
+      if (j.RecognitionStatus && j.RecognitionStatus !== 'Success') {
+        return send(res, 422, { error: 'no speech detected', status: j.RecognitionStatus });
+      }
+
       const nb = (j.NBest && j.NBest[0]) || {};
       const pa = nb.PronunciationAssessment || {};
-      const words = (nb.Words || []).map(w => ({ w: (w.Word || '').toLowerCase(), score: Math.round((w.PronunciationAssessment && w.PronunciationAssessment.AccuracyScore) || 0) }));
-      const fixes = words.filter(o => o.score < 75).map(o => `「${o.w}」发音再练练`);
-      return send(res, 200, { score: Math.round(pa.AccuracyScore || pa.ComprehensiveScore || 0), words, fixes, detail: pa });
-    } catch (e) { return send(res, 502, { error: 'azure failed', msg: String(e) }); }
+      const words = (nb.Words || []).map(w => ({
+        w: (w.Word || '').toLowerCase(),
+        score: Math.round((w.PronunciationAssessment && w.PronunciationAssessment.AccuracyScore) || 0)
+      })).filter(w => w.w);
+
+      const score = Math.round(
+        nb.PronScore != null ? nb.PronScore :
+        pa.PronScore != null ? pa.PronScore :
+        nb.AccuracyScore != null ? nb.AccuracyScore :
+        pa.AccuracyScore != null ? pa.AccuracyScore :
+        (words.length ? words.reduce((a, b) => a + b.score, 0) / words.length : 0)
+      );
+
+      const fixes = words.filter(o => o.score < 75).slice(0, 3)
+        .map(o => `「${o.w}」发音再练练，注意元音和重音`);
+
+      return send(res, 200, {
+        score,
+        words,
+        fixes,
+        fluency: nb.FluencyScore != null ? Math.round(nb.FluencyScore) : null,
+        completeness: nb.CompletenessScore != null ? Math.round(nb.CompletenessScore) : null,
+        recognized: nb.Display || j.DisplayText || ''
+      });
+    } catch (e) {
+      console.error('[score] error', e);
+      return send(res, 502, { error: 'azure failed', msg: String(e.message || e) });
+    }
   }
 
   // OCR（代理 OCR.space）
@@ -106,8 +178,9 @@ const server = http.createServer(async (req, res) => {
     let image, language;
     try { const j = JSON.parse(await readBody(req)); image = j.image; language = j.language || 'eng'; }
     catch (e) { return send(res, 400, { error: 'bad json' }); }
+    if (!image) return send(res, 400, { error: 'image required' });
     if (!process.env.OCR_SPACE_KEY) {
-      return send(res, 200, { mock: true, text: '（未配置 OCR_SPACE_KEY，已降级为模拟识别）', tags: ['L1', '识别结果'] });
+      return send(res, 200, { mock: true, text: '', tags: ['未配置 OCR_SPACE_KEY'] });
     }
     try {
       // OCR.space 的 base64image 要求带 data:image/...;base64, 前缀；前端若只发纯 base64，这里自动补上
@@ -118,7 +191,14 @@ const server = http.createServer(async (req, res) => {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params
       });
-      const oj = await or.json();
+      const raw = await or.text();
+      let oj;
+      try { oj = JSON.parse(raw); }
+      catch (e) { return send(res, 502, { error: 'ocr bad json', msg: raw.slice(0, 200) }); }
+
+      if (oj.IsErroredOnProcessing) {
+        return send(res, 502, { error: 'ocr failed', msg: (oj.ErrorMessage || []).join('; ').slice(0, 200) });
+      }
       const text = (oj.ParsedResults && oj.ParsedResults[0] && oj.ParsedResults[0].ParsedText) || '';
       return send(res, 200, { text: text.trim(), tags: ['识别结果'] });
     } catch (e) { return send(res, 502, { error: 'ocr failed', msg: String(e) }); }
