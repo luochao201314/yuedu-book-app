@@ -324,6 +324,7 @@
     onPermission: null,
     onPhoto: null,
     onError: null,
+    onAutoStop: null,
   };
   window.Native = {
     onPermission(ok) {
@@ -334,6 +335,9 @@
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
+    },
+    onAutoStop() {
+      if (Native.onAutoStop) Native.onAutoStop();
     },
   };
 
@@ -346,7 +350,8 @@
       const speed = Math.max(0.5, Math.min(1.4, rate || Store.settings().rate));
       if (Native.available()) {
         try {
-          Android.speak(text, speed, o.pitch || 1.0);
+          // 只传 2 个参数，与 Java 桥 speak(String,float) 严格匹配，避免 WebView 找不到方法
+          Android.speak(text, speed);
           return true;
         } catch (e) {}
       }
@@ -355,16 +360,18 @@
         return false;
       }
       try {
+        const isZh = /[一-鿿]/.test(text);
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
-        u.lang = 'en-US';
+        u.lang = isZh ? 'zh-CN' : 'en-US';
         u.rate = speed;
         u.pitch = o.pitch || 1.05;
         const vs = window.speechSynthesis.getVoices() || [];
-        const pick =
-          vs.find((v) => /en[-_]US/i.test(v.lang) && /samantha|zira|aria|jenny|female|google us/i.test(v.name)) ||
-          vs.find((v) => /en[-_]US/i.test(v.lang)) ||
-          vs.find((v) => /^en/i.test(v.lang));
+        const pick = isZh
+          ? vs.find((v) => /zh|chinese|中文|普通话/i.test(v.lang + v.name)) || null
+          : vs.find((v) => /en[-_]US/i.test(v.lang) && /samantha|zira|aria|jenny|female|google us/i.test(v.name)) ||
+            vs.find((v) => /en[-_]US/i.test(v.lang)) ||
+            vs.find((v) => /^en/i.test(v.lang));
         if (pick) u.voice = pick;
         window.speechSynthesis.speak(u);
         return true;
@@ -400,6 +407,7 @@
     _maxTimer: null,
     onTick: null,
     onAutoStop: null,
+    _vad: null,
     isRecording() {
       return Rec.mode != null;
     },
@@ -420,8 +428,27 @@
         const src = ac.createMediaStreamSource(stream);
         const node = ac.createScriptProcessor(4096, 1, 1);
         const chunks = [];
+        // 静音检测（VAD）：说话开始后，若持续静音 1.2s 或总时长超 15s，自动停录
+        Rec._vad = { start: Date.now(), sil: 0, has: false };
         node.onaudioprocess = (ev) => {
-          chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+          const d = ev.inputBuffer.getChannelData(0);
+          chunks.push(new Float32Array(d));
+          let sum = 0;
+          for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
+          const rms = Math.sqrt(sum / d.length);
+          const now = Date.now();
+          if (rms > 0.01) {
+            Rec._vad.has = true;
+            Rec._vad.sil = 0;
+          } else if (Rec._vad.has) {
+            if (!Rec._vad.sil) Rec._vad.sil = now;
+            if (now - Rec._vad.sil > 1200 && now - Rec._vad.start > 800) {
+              if (Rec.onAutoStop) Rec.onAutoStop();
+            }
+          }
+          if (now - Rec._vad.start > 15000) {
+            if (Rec.onAutoStop) Rec.onAutoStop();
+          }
         };
         src.connect(node);
         node.connect(ac.destination);

@@ -165,7 +165,7 @@ input{font-family:inherit}
 .w{border-radius:5px;padding:0 1px}
 .w.good{color:var(--good)}
 .w.mid{color:var(--warn)}
-.w.bad{color:var(--bad);text-decoration:underline wavy rgba(232,95,95,.6);text-underline-offset:4px}
+.w.bad{color:#E22424;font-weight:800;font-size:1.06em;text-decoration:underline wavy #E22424;text-underline-offset:4px}
 .fix{margin-top:9px;font-size:12.5px;line-height:1.6;color:#9A5A16;background:var(--warn-soft);border-radius:12px;padding:9px 11px}
 .fix b{color:#8A4E10}
 .rec-row{display:flex;align-items:center;gap:10px;margin-top:10px}
@@ -969,6 +969,7 @@ window.SEED_BOOKS = [
     onPermission: null,
     onPhoto: null,
     onError: null,
+    onAutoStop: null,
   };
   window.Native = {
     onPermission(ok) {
@@ -979,6 +980,9 @@ window.SEED_BOOKS = [
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
+    },
+    onAutoStop() {
+      if (Native.onAutoStop) Native.onAutoStop();
     },
   };
 
@@ -991,7 +995,8 @@ window.SEED_BOOKS = [
       const speed = Math.max(0.5, Math.min(1.4, rate || Store.settings().rate));
       if (Native.available()) {
         try {
-          Android.speak(text, speed, o.pitch || 1.0);
+          // 只传 2 个参数，与 Java 桥 speak(String,float) 严格匹配，避免 WebView 找不到方法
+          Android.speak(text, speed);
           return true;
         } catch (e) {}
       }
@@ -1000,16 +1005,18 @@ window.SEED_BOOKS = [
         return false;
       }
       try {
+        const isZh = /[一-鿿]/.test(text);
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
-        u.lang = 'en-US';
+        u.lang = isZh ? 'zh-CN' : 'en-US';
         u.rate = speed;
         u.pitch = o.pitch || 1.05;
         const vs = window.speechSynthesis.getVoices() || [];
-        const pick =
-          vs.find((v) => /en[-_]US/i.test(v.lang) && /samantha|zira|aria|jenny|female|google us/i.test(v.name)) ||
-          vs.find((v) => /en[-_]US/i.test(v.lang)) ||
-          vs.find((v) => /^en/i.test(v.lang));
+        const pick = isZh
+          ? vs.find((v) => /zh|chinese|中文|普通话/i.test(v.lang + v.name)) || null
+          : vs.find((v) => /en[-_]US/i.test(v.lang) && /samantha|zira|aria|jenny|female|google us/i.test(v.name)) ||
+            vs.find((v) => /en[-_]US/i.test(v.lang)) ||
+            vs.find((v) => /^en/i.test(v.lang));
         if (pick) u.voice = pick;
         window.speechSynthesis.speak(u);
         return true;
@@ -1045,6 +1052,7 @@ window.SEED_BOOKS = [
     _maxTimer: null,
     onTick: null,
     onAutoStop: null,
+    _vad: null,
     isRecording() {
       return Rec.mode != null;
     },
@@ -1065,8 +1073,27 @@ window.SEED_BOOKS = [
         const src = ac.createMediaStreamSource(stream);
         const node = ac.createScriptProcessor(4096, 1, 1);
         const chunks = [];
+        // 静音检测（VAD）：说话开始后，若持续静音 1.2s 或总时长超 15s，自动停录
+        Rec._vad = { start: Date.now(), sil: 0, has: false };
         node.onaudioprocess = (ev) => {
-          chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+          const d = ev.inputBuffer.getChannelData(0);
+          chunks.push(new Float32Array(d));
+          let sum = 0;
+          for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
+          const rms = Math.sqrt(sum / d.length);
+          const now = Date.now();
+          if (rms > 0.01) {
+            Rec._vad.has = true;
+            Rec._vad.sil = 0;
+          } else if (Rec._vad.has) {
+            if (!Rec._vad.sil) Rec._vad.sil = now;
+            if (now - Rec._vad.sil > 1200 && now - Rec._vad.start > 800) {
+              if (Rec.onAutoStop) Rec.onAutoStop();
+            }
+          }
+          if (now - Rec._vad.start > 15000) {
+            if (Rec.onAutoStop) Rec.onAutoStop();
+          }
         };
         src.connect(node);
         node.connect(ac.destination);
@@ -1552,6 +1579,18 @@ window.SEED_BOOKS = [
       });
   }
 
+  function buildScoreSpeech(res) {
+    if (!res) return '';
+    const low = (res.words || [])
+      .filter((w) => w.score < 72)
+      .map((w) => w.w)
+      .slice(0, 5);
+    let s = '得分 ' + res.score + ' 分。';
+    if (low.length) s += ' 需要多练习的单词有：' + low.join('、') + '。';
+    else s += ' 读得很棒，继续加油！';
+    return s;
+  }
+
   function paintScore(card, res, animate) {
     const pill = $('.score-pill', card);
     const wordsEl = $('.words', card);
@@ -1606,6 +1645,10 @@ window.SEED_BOOKS = [
     $('#recBar').classList.add('show');
     Rec.onTick = (sec) => {
       $('#recTime').textContent = sec.toFixed(1) + 's';
+    };
+    // 说完后自动停录并评分（无需手动点停止）
+    Rec.onAutoStop = () => {
+      if (Rec.isRecording()) stopFollow();
     };
     // 录音期间按钮变为停止
     const btn = $('[data-act="follow"]', card);
@@ -1689,6 +1732,9 @@ window.SEED_BOOKS = [
         dur: Math.round(ctx.dur * 10) / 10,
       });
       paintScore(ctx.card, res, true);
+      // 朗读评分结果（中文）
+      const zh = buildScoreSpeech(res);
+      if (zh) TTS.speak(zh, 0.95);
       showRecRow(ctx);
       renderReaderFoot();
       updateReaderBar();

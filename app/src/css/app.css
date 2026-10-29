@@ -157,7 +157,7 @@ input{font-family:inherit}
 .w{border-radius:5px;padding:0 1px}
 .w.good{color:var(--good)}
 .w.mid{color:var(--warn)}
-.w.bad{color:var(--bad);text-decoration:underline wavy rgba(232,95,95,.6);text-underline-offset:4px}
+.w.bad{color:#E22424;font-weight:800;font-size:1.06em;text-decoration:underline wavy #E22424;text-underline-offset:4px}
 .fix{margin-top:9px;font-size:12.5px;line-height:1.6;color:#9A5A16;background:var(--warn-soft);border-radius:12px;padding:9px 11px}
 .fix b{color:#8A4E10}
 .rec-row{display:flex;align-items:center;gap:10px;margin-top:10px}

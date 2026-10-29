@@ -44,12 +44,14 @@ public class MainActivity extends Activity {
     private boolean ttsReady = false;
     private String pendingTts = null;
     private float pendingRate = 1f;
+    private boolean pendingZh = false;
 
     private AudioRecord recorder;
     private Thread recThread;
     private volatile boolean recording = false;
     private ByteArrayOutputStream pcmOut;
     private Uri cameraUri;
+    private String lastRecording = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -116,7 +118,7 @@ public class MainActivity extends Activity {
                     tts.setLanguage(Locale.US);
                     ttsReady = true;
                     if (pendingTts != null) {
-                        speakNow(pendingTts, pendingRate);
+                        speakNow(pendingTts, pendingRate, pendingZh);
                         pendingTts = null;
                     }
                 }
@@ -124,12 +126,20 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void speakNow(String text, float rate) {
+    private boolean isZh(String text) {
+        return text != null && text.matches(".*[\\u4e00-\\u9fff].*");
+    }
+
+    private void speakNow(String text, float rate, boolean zh) {
         if (!ttsReady || tts == null) {
             pendingTts = text;
             pendingRate = rate;
+            pendingZh = zh;
             return;
         }
+        try {
+            tts.setLanguage(zh ? Locale.CHINESE : Locale.US);
+        } catch (Exception ignored) {}
         tts.setSpeechRate(Math.max(0.3f, Math.min(1.6f, rate)));
         tts.setPitch(1.03f);
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "yq");
@@ -153,6 +163,7 @@ public class MainActivity extends Activity {
                 js("window.Native.onError('麦克风初始化失败')");
                 return;
             }
+            lastRecording = null;
             pcmOut = new ByteArrayOutputStream();
             recorder.startRecording();
             recording = true;
@@ -160,10 +171,36 @@ public class MainActivity extends Activity {
                 @Override public void run() {
                     byte[] buf = new byte[2048];
                     long start = System.currentTimeMillis();
+                    long speechStart = 0;
+                    long silenceStart = 0;
+                    boolean hasSpeech = false;
                     while (recording) {
                         int n = recorder.read(buf, 0, buf.length);
-                        if (n > 0) pcmOut.write(buf, 0, n);
-                        if (System.currentTimeMillis() - start > 60000) break;
+                        if (n > 0) {
+                            pcmOut.write(buf, 0, n);
+                            // 计算 RMS 做静音检测
+                            long sum = 0;
+                            for (int i = 0; i + 1 < n; i += 2) {
+                                short s = (short) ((buf[i] & 0xff) | (buf[i + 1] << 8));
+                                sum += (long) s * s;
+                            }
+                            double rms = Math.sqrt(sum / (n / 2)) / 32768.0;
+                            long now = System.currentTimeMillis();
+                            if (rms > 0.012) {
+                                if (!hasSpeech) { hasSpeech = true; speechStart = now; }
+                                silenceStart = 0;
+                            } else if (hasSpeech) {
+                                if (silenceStart == 0) silenceStart = now;
+                                // 说话开始后，持续静音 1.2s 即自动停止
+                                if (silenceStart > 0 && now - silenceStart > 1200 && now - speechStart > 800) {
+                                    autoStop();
+                                    return;
+                                }
+                            }
+                            if (now - start > 15000) { autoStop(); return; } // 最长 15s 兜底
+                        } else if (n < 0) {
+                            break;
+                        }
                     }
                 }
             });
@@ -173,10 +210,31 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void autoStop() {
+        if (!recording && lastRecording == null) return;
+        recording = false;
+        if (recorder != null) {
+            try { recorder.stop(); } catch (Exception ignored) {}
+            recorder.release();
+            recorder = null;
+        }
+        byte[] pcm = pcmOut == null ? new byte[0] : pcmOut.toByteArray();
+        pcmOut = null;
+        if (pcm.length >= 3200) lastRecording = Base64.encodeToString(wav(pcm), Base64.NO_WRAP);
+        js("window.Native.onAutoStop()");
+    }
+
     private String stopRec() {
         try {
+            if (lastRecording != null) {
+                String r = lastRecording;
+                lastRecording = null;
+                return r;
+            }
             recording = false;
-            if (recThread != null) recThread.join(600);
+            if (recThread != null) {
+                try { recThread.join(600); } catch (Exception ignored) {}
+            }
             if (recorder != null) {
                 try { recorder.stop(); } catch (Exception ignored) {}
                 recorder.release();
@@ -200,6 +258,7 @@ public class MainActivity extends Activity {
                 recorder = null;
             }
             pcmOut = null;
+            lastRecording = null;
         } catch (Exception ignored) {}
     }
 
@@ -366,7 +425,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public String platform() { return "android-" + Build.VERSION.SDK_INT; }
 
-        @JavascriptInterface public void speak(String text, float rate) { speakNow(text, rate); }
+        @JavascriptInterface public void speak(String text, float rate) { speakNow(text, rate, isZh(text)); }
 
         @JavascriptInterface public void stopSpeak() { if (tts != null) tts.stop(); }
 

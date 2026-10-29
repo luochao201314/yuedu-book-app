@@ -248,6 +248,18 @@
       });
   }
 
+  function buildScoreSpeech(res) {
+    if (!res) return '';
+    const low = (res.words || [])
+      .filter((w) => w.score < 72)
+      .map((w) => w.w)
+      .slice(0, 5);
+    let s = '得分 ' + res.score + ' 分。';
+    if (low.length) s += ' 需要多练习的单词有：' + low.join('、') + '。';
+    else s += ' 读得很棒，继续加油！';
+    return s;
+  }
+
   function paintScore(card, res, animate) {
     const pill = $('.score-pill', card);
     const wordsEl = $('.words', card);
@@ -302,6 +314,10 @@
     $('#recBar').classList.add('show');
     Rec.onTick = (sec) => {
       $('#recTime').textContent = sec.toFixed(1) + 's';
+    };
+    // 说完后自动停录并评分（无需手动点停止）
+    Rec.onAutoStop = () => {
+      if (Rec.isRecording()) stopFollow();
     };
     // 录音期间按钮变为停止
     const btn = $('[data-act="follow"]', card);
@@ -385,6 +401,9 @@
         dur: Math.round(ctx.dur * 10) / 10,
       });
       paintScore(ctx.card, res, true);
+      // 朗读评分结果（中文）
+      const zh = buildScoreSpeech(res);
+      if (zh) TTS.speak(zh, 0.95);
       showRecRow(ctx);
       renderReaderFoot();
       updateReaderBar();
