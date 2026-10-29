@@ -106,10 +106,11 @@ const server = http.createServer(async (req, res) => {
       const url = `${endpoint}?language=${encodeURIComponent(language || 'en-US')}&format=detailed`;
 
       // Azure 要求该头为 base64(JSON)，且 ReferenceText 必填（缺了必 400）。
+      // Granularity 用 Phoneme：官方样例路径，必定返回逐词分（用 Word 时部分资源只回 0）。
       const paCfg = Buffer.from(JSON.stringify({
         ReferenceText: text,
         GradingSystem: 'HundredMark',
-        Granularity: 'Word',
+        Granularity: 'Phoneme',
         Dimension: 'Comprehensive',
         EnableMiscue: true
       })).toString('base64');
@@ -143,10 +144,27 @@ const server = http.createServer(async (req, res) => {
 
       const nb = (j.NBest && j.NBest[0]) || {};
       const pa = nb.PronunciationAssessment || {};
-      const words = (nb.Words || []).map(w => ({
-        w: (w.Word || '').toLowerCase(),
-        score: Math.round((w.PronunciationAssessment && w.PronunciationAssessment.AccuracyScore) || 0)
-      })).filter(w => w.w);
+      // 逐词分：不同 Granularity / API 版本下字段位置不同，逐个兜底
+      let words = (nb.Words || []).map(w => {
+        const wp = w.PronunciationAssessment || {};
+        const raw = wp.AccuracyScore != null ? wp.AccuracyScore
+          : w.AccuracyScore != null ? w.AccuracyScore
+          : w.Score != null ? w.Score
+          : w.PronScore != null ? w.PronScore
+          : (w.Phonemes && w.Phonemes.length
+              ? w.Phonemes.reduce((a, p) => a + ((p.PronunciationAssessment && p.PronunciationAssessment.AccuracyScore) || 0), 0) / w.Phonemes.length
+              : null);
+        return {
+          w: (w.Word || '').toLowerCase(),
+          score: raw == null ? 0 : Math.round(raw)
+        };
+      }).filter(w => w.w);
+
+      // 全部为 0 说明上游没给逐词分，宁可只给句分也不要画出全红的假标注
+      if (words.length && words.every(o => o.score === 0)) {
+        console.warn('[score] word scores all zero, dropping word detail', raw.slice(0, 600));
+        words = [];
+      }
 
       const score = Math.round(
         nb.PronScore != null ? nb.PronScore :
