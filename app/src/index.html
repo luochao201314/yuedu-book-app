@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#F6F8FB" />
+<title>悦读绘本 · 英语跟读</title>
+<!--__CSS__-->
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ================= 绘本库 ================= -->
+  <section class="screen active" id="s-library">
+    <header class="topbar">
+      <div>
+        <div class="hello" id="greet">早上好</div>
+        <h1 class="page-title">绘本库</h1>
+      </div>
+      <button class="avatar" id="avatarBtn" aria-label="我的">宝</button>
+    </header>
+
+    <div class="hero" id="hero">
+      <div class="hero-main">
+        <div class="hero-eyebrow">🔥 连续打卡</div>
+        <div class="hero-num"><b id="streakNum">0</b><span>天</span></div>
+        <div class="hero-sub" id="heroSub">今天还没读，开口读一句就算打卡</div>
+      </div>
+      <div class="hero-art">📚</div>
+    </div>
+
+    <div class="row-between">
+      <div class="chips" id="levelChips"></div>
+      <button class="icon-btn" id="searchBtn" aria-label="搜索">🔍</button>
+    </div>
+    <div class="search-wrap" id="searchWrap" hidden>
+      <input id="searchInput" class="input" placeholder="搜书名 / 系列 / 关键词" />
+    </div>
+
+    <div class="section-head">
+      <h2>读本 <span class="count" id="bookCount"></span></h2>
+      <button class="link-btn" id="syncBtn">同步公版</button>
+    </div>
+
+    <div class="grid" id="bookGrid"></div>
+    <div class="empty" id="libEmpty" hidden>没有找到绘本，换个词试试</div>
+
+    <div class="float-actions">
+      <button class="fab" id="ocrBtn"><span>📷</span> 拍照录入</button>
+    </div>
+  </section>
+
+  <!-- ================= 阅读 ================= -->
+  <section class="screen" id="s-reader">
+    <header class="reader-head">
+      <button class="icon-btn" id="readerBack" aria-label="返回">←</button>
+      <div class="reader-title">
+        <div class="rt-name" id="readerName">绘本</div>
+        <div class="rt-meta" id="readerMeta"></div>
+      </div>
+      <button class="icon-btn" id="readerZh" aria-label="中文">中</button>
+      <button class="icon-btn" id="readerDel" aria-label="删除" hidden>🗑</button>
+    </header>
+    <div class="reader-progress"><i id="readerBar"></i></div>
+    <div class="sentence-list" id="sentenceList"></div>
+    <div class="reader-foot" id="readerFoot"></div>
+  </section>
+
+  <!-- ================= 成长 ================= -->
+  <section class="screen" id="s-growth">
+    <header class="topbar">
+      <h1 class="page-title">我的成长</h1>
+      <div class="pill" id="growthPill">🌱 新手</div>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat"><b id="stBooks">0</b><span>读完绘本</span></div>
+      <div class="stat"><b id="stSent">0</b><span>跟读句数</span></div>
+      <div class="stat"><b id="stAvg">–</b><span>平均得分</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>近 7 天得分</h3><span class="muted" id="trendHint"></span></div>
+      <div class="chart" id="trendChart"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>薄弱点</h3><span class="muted">点单词听发音</span></div>
+      <div id="weakList"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>最近跟读</h3><span class="muted">本机记录</span></div>
+      <div id="recentList"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>成就</h3><span class="muted" id="badgeCount"></span></div>
+      <div class="badges" id="badgeGrid"></div>
+    </div>
+  </section>
+
+  <!-- ================= 我的 ================= -->
+  <section class="screen" id="s-me">
+    <header class="topbar">
+      <h1 class="page-title">我的</h1>
+    </header>
+
+    <div class="profile">
+      <div class="profile-avatar" id="meAvatar">宝</div>
+      <div class="profile-info">
+        <input id="meName" class="name-input" maxlength="12" />
+        <div class="muted">小学阶段 · 英语启蒙</div>
+      </div>
+      <button class="icon-btn" id="saveName" aria-label="保存">✓</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>后端服务</h3><span class="status" id="apiStatus">检测中…</span></div>
+      <label class="field">
+        <span>服务地址</span>
+        <input id="apiBase" class="input" placeholder="https://..." />
+      </label>
+      <div class="btn-row">
+        <button class="btn ghost" id="apiReset">恢复默认</button>
+        <button class="btn primary" id="apiTest">保存并检测</button>
+      </div>
+      <div class="note" id="apiNote"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>朗读设置</h3></div>
+      <label class="field">
+        <span>领读语速</span>
+        <input id="rate" type="range" min="0.6" max="1.2" step="0.05" />
+        <b class="rate-val" id="rateVal">0.9x</b>
+      </label>
+      <div class="switch-row">
+        <span>显示中文提示</span>
+        <button class="switch" id="zhSwitch" role="switch"></button>
+      </div>
+      <div class="switch-row">
+        <span>录音后自动评分</span>
+        <button class="switch on" id="autoScore" role="switch"></button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>数据</h3><span class="muted" id="dataSize"></span></div>
+      <div class="btn-row">
+        <button class="btn ghost" id="exportBtn">导出成长记录</button>
+        <button class="btn danger-ghost" id="clearBtn">清空本机数据</button>
+      </div>
+      <div class="note">成长数据保存在本机。换手机前请先导出备份；后续接入账号后可云端同步。</div>
+    </div>
+
+    <div class="card legal">
+      <h3>关于内容版权</h3>
+      <p>App 内「公版经典」均为公有领域作品（Public Domain），可自由使用；「我的绘本」为你拍照录入的私人内容，仅存本机。<b>不提供</b>牛津树、红火箭、神奇校车等受版权保护的商业读物。</p>
+      <p class="muted">版本 1.0.0 · 本地优先 · 评分由 Azure 发音评测提供</p>
+    </div>
+  </section>
+
+  <nav class="nav" id="nav">
+    <button data-go="library" class="on"><span class="ic">📚</span>绘本库</button>
+    <button data-go="growth"><span class="ic">🌱</span>成长</button>
+    <button data-go="me"><span class="ic">👤</span>我的</button>
+  </nav>
+
+  <div class="rec-bar" id="recBar">
+    <div class="rec-info"><span class="dot"></span><span id="recTime">0.0s</span><span class="rec-hint">正在听你读…</span></div>
+    <button class="btn stop" id="recStop">停止并评分</button>
+  </div>
+</div>
+
+<!-- 通用底部弹层 -->
+<div class="sheet-mask" id="sheetMask">
+  <div class="sheet" id="sheet">
+    <div class="sheet-grab"></div>
+    <div id="sheetBody"></div>
+  </div>
+</div>
+
+<input type="file" id="filePick" accept="image/*" capture="environment" hidden />
+<div class="toast" id="toast"></div>
+<div class="loading" id="loading" hidden><div class="spinner"></div><span id="loadingText">加载中…</span></div>
+
+<!--__JS__-->
+</body>
+</html>
