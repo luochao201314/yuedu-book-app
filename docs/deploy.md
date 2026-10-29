@@ -23,19 +23,63 @@
 
 ## 二、方案 A：Render 一键部署（推荐，免费、自带 https）
 
-仓库已包含 `render.yaml`，可「蓝图」式一键部署：
+仓库已包含 `render.yaml`，可「蓝图」式一键部署。**前提：上一步已将代码推到 GitHub（`yuedu-book-app` 仓库有内容）。**
 
-1. 把整个项目推到 GitHub。
-2. 打开 https://render.com → 注册（可用 GitHub 登录）。
-3. 右上角 **New** → **Blueprint** → 连接你的 GitHub 仓库。
-4. Render 读取 `render.yaml`，自动识别要建一个 Web 服务。
-5. 在环境变量确认页：
-   - `AZURE_SPEECH_KEY`、`OCR_SPACE_KEY` 标记为 `sync: false`，**点击填写你申请的真实值**（不会进仓库）。
-   - `AZURE_SPEECH_REGION` 默认 `eastasia`（如你 Azure 建在别的区域，改成对应值）。
-6. 点 **Apply** → 等待 1~2 分钟构建完成。
-7. 部署成功后得到地址，形如 `https://yuedu-book-backend.onrender.com`。
+### 逐屏操作步骤
+
+**第 1 步：注册 / 登录 Render**
+1. 打开 https://render.com
+2. 点右上角 **「Get Started」** 或 **「Sign In」**
+3. 选 **「Sign in with GitHub」**（用你 GitHub 账号 `luochao201314` 授权，和 GitHub Desktop 同一个账号，不用再注册）
+
+**第 2 步：用 Blueprint 连接仓库（关键：选 Blueprint 不是 Web Service）**
+1. 登录后进入 Dashboard，右上角点 **「New」** → 选 **「Blueprint」**（⚠️ 不要选 Web Service；选 Blueprint 才会自动读取仓库里的 `render.yaml`）
+2. 首次会让你 **Authorize GitHub**（授权 Render 访问你的仓库），点授权
+3. 授权后 Render 列出你的仓库，找到并选 **`yuedu-book-app`**
+4. Render 解析 `render.yaml`，会显示一个待创建的服务：**`yuedu-book-backend`**（已自动带好：rootDir=server、startCommand=npm start、plan=free、region=singapore、healthCheck=/api/health）
+
+**第 3 步：填写密钥环境变量**
+在「Environment Variables / 环境变量」区域，Render 会列出从 `render.yaml` 读到的变量：
+- `NODE_VERSION` = `18`（自动，不用动）
+- `AZURE_SPEECH_REGION` = `eastasia`（自动；**只有你 Azure 资源建在别的区域才改**，如 `eastus`）
+- `AZURE_SPEECH_KEY` 标记为 `sync: false` → 点它右侧的 **「Add secret value」/ 输入框**，粘贴你的 **Azure Key1**
+- `OCR_SPACE_KEY` 标记为 `sync: false` → 同样点输入框，粘贴你的 **OCR.space Key**
+
+> 这两个 key 填在 Render 的环境变量里，**不会进代码仓库**，安全。
+
+**第 4 步：创建并等待部署**
+1. 页面底部点 **「Apply」**（或 **「Create」**）
+2. 进入服务页，看到 **「Deploy in progress…」**，下方日志滚动；等出现 `Server running` 类提示、状态变 **「Live」**（通常 1~3 分钟）
+3. 如果部署失败，看日志报错（最常见是环境变量名拼错），改完点 **「Manual Deploy → Deploy latest commit」** 重来
+
+**第 5 步：拿到你的 https 地址**
+1. 服务页**顶部**会显示一行 URL，形如：
+   ```
+   https://yuedu-book-backend.onrender.com
+   ```
+   （也可能叫 `https://yuedu-book-xxx.onrender.com`，以你页面显示的为准）
+2. 点一下这个链接能打开后端首页（显示 App 的 PWA 页面）即说明部署成功。
+
+**第 6 步：验证后端健康检查**
+浏览器访问：
+```
+https://<你的地址>/api/health
+```
+返回（已填密钥）：
+```json
+{ "ok": true, "azure": true, "ocr": true }
+```
+若 `azure:false` / `ocr:false`，说明对应密钥没填对 → 回 Render 服务页 **Environment** 标签补填，再 **Manual Deploy** 一次。
+
+### 把地址填回 App（启用真实接口）
+1. 打开 App（安卓 APK 或 PWA 安装版）→ 底部 **「我的 👤」**
+2. 点 **「🔗 后端地址（真实接口）」**
+3. 粘贴 `https://yuedu-book-backend.onrender.com`（**必须 https、结尾不要斜杠**）
+4. 保存 → 状态从 🟡 离线演示 变 **🟢 真实（已连接）**
+5. 之后跟走真实 Azure 评分、拍照走真实 OCR.space；未配密钥自动降级模拟。
 
 > 免费档特性：闲置会自动休眠，第一次访问可能慢 20~40 秒（冷启动），之后正常。
+> 想常驻不休眠：升级付费档，或改用「方案 C 自有服务器」。
 
 ---
 

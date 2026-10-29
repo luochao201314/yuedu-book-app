@@ -49,7 +49,13 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                return assetLoader.shouldInterceptRequest(request.getUrl());
+                WebResourceResponse resp = assetLoader.shouldInterceptRequest(request.getUrl());
+                if (resp != null) return resp;
+                // 兜底：本地资源缺失时返回可控提示，避免系统 ERR_INVALID_RESPONSE 白屏
+                String html = "<!doctype html><meta charset=utf-8><body style='font-family:sans-serif;padding:24px'>"
+                        + "<h2>资源加载失败</h2><p>本地页面未找到，请重新打包 APK 后再安装。</p></body>";
+                return new WebResourceResponse("text/html", "utf-8",
+                        new java.io.ByteArrayInputStream(html.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             }
         });
 
@@ -77,7 +83,8 @@ public class MainActivity extends Activity {
                     new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO);
         }
 
-        webView.loadUrl("https://" + APP_HOST + "/index.html");
+        // 前端资源位于 assets/www/，故路径需带上 /www/ 前缀
+        webView.loadUrl("https://" + APP_HOST + "/www/index.html");
     }
 
     @Override
