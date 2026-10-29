@@ -51,6 +51,19 @@ const server = http.createServer(async (req, res) => {
     catch (e) { return send(res, 500, { error: 'books.json missing' }); }
   }
 
+  // 公版绘本正文代理：gutenberg.org 无 CORS 头，浏览器直连会失败，故由后端代理转发。
+  // 仅允许 gutenberg/archive 域名，避免被当作开放代理（SSRF）。
+  if (u.pathname === '/api/gutenberg' && req.method === 'GET') {
+    const target = u.searchParams.get('url') || '';
+    const okHost = /^https:\/\/(www\.)?gutenberg\.org\//.test(target) || /^https:\/\/(www\.)?archive\.org\//.test(target);
+    if (!okHost) return send(res, 400, { error: 'only gutenberg/archive urls allowed' });
+    try {
+      const gr = await fetch(target);
+      const text = await gr.text();
+      return send(res, 200, { text });
+    } catch (e) { return send(res, 502, { error: 'gutenberg fetch failed', msg: String(e) }); }
+  }
+
   // 发音评测（代理 Azure Pronunciation Assessment）
   if (u.pathname === '/api/score' && req.method === 'POST') {
     let text, audio;
@@ -72,7 +85,14 @@ const server = http.createServer(async (req, res) => {
         },
         body: buf
       });
-      const j = await ar.json();
+      // 防御：Azure 返回非 JSON（如 400 Bad Request 文本）时，ar.json() 会抛 SyntaxError。
+      // 先读文本、判 content-type，异常时降级为友好提示而非 502。
+      const ct = ar.headers.get('content-type') || '';
+      const raw = await ar.text();
+      if (!ar.ok || !ct.includes('json')) {
+        return send(res, 200, { mock: true, score: 0, words: [], fixes: ['Azure 返回错误：' + raw.slice(0, 120)] });
+      }
+      const j = JSON.parse(raw);
       const nb = (j.NBest && j.NBest[0]) || {};
       const pa = nb.PronunciationAssessment || {};
       const words = (nb.Words || []).map(w => ({ w: (w.Word || '').toLowerCase(), score: Math.round((w.PronunciationAssessment && w.PronunciationAssessment.AccuracyScore) || 0) }));
@@ -90,7 +110,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { mock: true, text: '（未配置 OCR_SPACE_KEY，已降级为模拟识别）', tags: ['L1', '识别结果'] });
     }
     try {
-      const params = new URLSearchParams({ apikey: process.env.OCR_SPACE_KEY, base64image: image, language, OCREngine: '2', isOverlayRequired: 'false' });
+      // OCR.space 的 base64image 要求带 data:image/...;base64, 前缀；前端若只发纯 base64，这里自动补上
+      const b64 = image.startsWith('data:') ? image : 'data:image/jpeg;base64,' + image;
+      const params = new URLSearchParams({ apikey: process.env.OCR_SPACE_KEY, base64image: b64, language, OCREngine: '2', isOverlayRequired: 'false' });
       const or = await fetch('https://api.ocr.space/parse/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

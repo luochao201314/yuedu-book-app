@@ -443,7 +443,7 @@ async function openReader(id){
 async function loadGutenberg(b){
   if(!API_BASE){ return; } // 离线演示不拉取
   try{
-    const r=await fetch(b.gutenberg); const t=await r.text();
+    const r=await fetch(API_BASE+'/api/gutenberg?url='+encodeURIComponent(b.gutenberg)); const jr=await r.json(); const t=jr.text;
     let body=t; const m=body.indexOf('START OF TH'); if(m>0) body=body.slice(m);
     const cleaned=body.replace(/[\r\n]+/g,' ').replace(/\s+/g,' ');
     const parts=cleaned.split(/(?<=\.)\s+/).map(s=>s.trim()).filter(s=>s.length>12 && /[a-zA-Z]{4}/.test(s)).slice(0,10);
