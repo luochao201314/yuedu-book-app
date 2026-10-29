@@ -1,7 +1,7 @@
 name: Build Android APK
 
 on:
-  workflow_dispatch:        # 允许在 GitHub Actions 页面手动触发
+  workflow_dispatch:        # 可在 GitHub Actions 页面手动触发
   push:
     branches: [ main, master ]
 
@@ -11,6 +11,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -24,23 +29,29 @@ jobs:
           packages: 'platform-tools build-tools;34.0.0 platforms;android-34'
           accept-android-sdk-licenses: true
 
-      # 云端无 Android Studio，用 Gradle 发行版直接构建（无需本地 Gradle Wrapper 二进制）
+      # 用 Gradle 发行版直接构建，省掉仓库里的 wrapper 二进制
       - name: Install Gradle 8.6
         run: |
           curl -sL -o gradle.zip https://services.gradle.org/distributions/gradle-8.6-bin.zip
           unzip -q gradle.zip -d "$HOME/gradle-home"
           echo "$HOME/gradle-home/gradle-8.6/bin" >> "$GITHUB_PATH"
 
-      # 把最新的 Web 前端同步进 APK 资源目录
+      # app/index.html 是 app/src 的构建产物：这里校验它没有和源码漂移
+      - name: Rebuild web bundle and check for drift
+        run: |
+          node tools/build-www.js
+          git diff --exit-code -- app/index.html
+
+      # 单文件前端放进 APK 资源目录（MainActivity 从 assets/index.html 读取）
       - name: Sync web assets into APK
         run: |
-          mkdir -p android/app/src/main/assets/www
-          cp -r app/* android/app/src/main/assets/www/
+          mkdir -p android/app/src/main/assets
+          cp app/index.html android/app/src/main/assets/index.html
 
       - name: Point Gradle to Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Build release APK (auto-signed with debug key → 可直接安装)
+      - name: Build release APK (debug-signed, installable as-is)
         run: |
           cd android
           gradle assembleRelease --no-daemon

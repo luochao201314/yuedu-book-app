@@ -2,12 +2,22 @@
 node_modules/
 server/.env
 
+# 构建产物：app/index.html 由 app/src 生成，但需要入库（后端首页 / APK 资源都用它）
+# 这里只忽略 APK 资源目录里的那份拷贝
+android/app/src/main/assets/index.html
+
 # Android build artifacts
 android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
 *.apk
+
+# 签名私钥与出包产物绝不入库
+release/*.jks
+release/*.keystore
+release/*.apk
+release/*.idsig
 
 # OS
 .DS_Store
