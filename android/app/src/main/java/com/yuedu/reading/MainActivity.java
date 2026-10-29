@@ -191,8 +191,8 @@ public class MainActivity extends Activity {
                                 silenceStart = 0;
                             } else if (hasSpeech) {
                                 if (silenceStart == 0) silenceStart = now;
-                                // 说话开始后，持续静音 1.2s 即自动停止
-                                if (silenceStart > 0 && now - silenceStart > 1200 && now - speechStart > 800) {
+                                // 说话开始后，持续静音 1.5s 即自动停止（避免把句中正常停顿误判为结束）
+                                if (silenceStart > 0 && now - silenceStart > 1500 && now - speechStart > 800) {
                                     autoStop();
                                     return;
                                 }

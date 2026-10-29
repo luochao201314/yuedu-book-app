@@ -99,6 +99,7 @@
     state.zh = Store.settings().zh;
     renderReader();
     APP.go('reader');
+    TTS.warm(); // 预热云端朗读路由，降低首次领读的等待
   }
 
   /* 正文获取优先级：后端代理（无 CORS 限制）→ 原生 httpGet → 直连 */
@@ -296,6 +297,8 @@
   /* ---------- 录音与评分 ---------- */
   let recCtx = null;
   async function startFollow(card, text, key) {
+    // 点击跟读：先立即停止领读发音（原生 TTS / 云端音频 / Web Speech 一并打断），避免重叠
+    TTS.stop();
     if (Rec.isRecording()) {
       await stopFollow();
       return;
@@ -315,10 +318,14 @@
     Rec.onTick = (sec) => {
       $('#recTime').textContent = sec.toFixed(1) + 's';
     };
-    // 说完后自动停录并评分（无需手动点停止）
-    Rec.onAutoStop = () => {
+    // 说完后自动停录并评分（无需手动点停止）。
+    // Android 原生侧由 Java 静音检测触发 window.Native.onAutoStop()，
+    // 因此必须同时挂接 Native.onAutoStop（原生路径）与 Rec.onAutoStop（Web 路径）。
+    const autoStop = () => {
       if (Rec.isRecording()) stopFollow();
     };
+    Rec.onAutoStop = autoStop;
+    Native.onAutoStop = autoStop;
     // 录音期间按钮变为停止
     const btn = $('[data-act="follow"]', card);
     if (btn) {
@@ -330,6 +337,8 @@
   async function stopFollow() {
     if (!Rec.isRecording()) return;
     clearInterval(Rec._timer);
+    Rec.onAutoStop = null;
+    Native.onAutoStop = null;
     const ctx = recCtx;
     recCtx = null;
     $('#recBar').classList.remove('show');

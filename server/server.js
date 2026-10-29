@@ -42,6 +42,10 @@ function readBody(req) {
   });
 }
 
+function escapeXml(s) {
+  return String(s).replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (u.pathname.startsWith('/api/')) {
@@ -53,7 +57,7 @@ const server = http.createServer(async (req, res) => {
 
   // 后端健康/密钥状态（不暴露密钥本身）
   if (u.pathname === '/api/health') {
-    return send(res, 200, { ok: true, azure: !!process.env.AZURE_SPEECH_KEY, ocr: !!process.env.OCR_SPACE_KEY });
+    return send(res, 200, { ok: true, azure: !!process.env.AZURE_SPEECH_KEY, tts: !!process.env.AZURE_SPEECH_KEY, ocr: !!process.env.OCR_SPACE_KEY });
   }
 
   // 公版绘本书目（Project Gutenberg，无需密钥）
@@ -188,6 +192,55 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.error('[score] error', e);
       return send(res, 502, { error: 'azure failed', msg: String(e.message || e) });
+    }
+  }
+
+  // 云端神经网络朗读（代理 Azure 语音合成）。与发音评测共用 AZURE_SPEECH_KEY。
+  // 返回 mp3(base64)；未配置密钥时返回 {mock:true}，前端自动退回设备原生 TTS。
+  if (u.pathname === '/api/tts' && req.method === 'POST') {
+    let text, lang, rate, voice;
+    try { const j = JSON.parse(await readBody(req)); text = j.text; lang = j.lang || 'en-US'; rate = j.rate; voice = j.voice; }
+    catch (e) { return send(res, 400, { error: 'bad json' }); }
+    text = typeof text === 'string' ? text.trim() : '';
+    if (!text) return send(res, 400, { error: 'text required' });
+    if (text.length > 2000) return send(res, 400, { error: 'text too long' });
+
+    if (!process.env.AZURE_SPEECH_KEY) {
+      return send(res, 200, { mock: true, audio: '', note: '未配置 AZURE_SPEECH_KEY，无法使用云端朗读' });
+    }
+    try {
+      const region = process.env.AZURE_SPEECH_REGION || 'eastasia';
+      const endpoint = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
+      const isZh = /^zh/i.test(lang);
+      const voiceName = voice || (isZh ? 'zh-CN-XiaoxiaoNeural' : 'en-US-AriaNeural');
+      const r2 = Math.max(0.5, Math.min(1.5, typeof rate === 'number' && isFinite(rate) ? rate : 1));
+      const ssml =
+        '<?xml version="1.0" encoding="utf-8"?>\n' +
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="' + lang + '">\n' +
+        '  <voice name="' + voiceName + '">\n' +
+        '    <prosody rate="' + r2 + 'x">' + escapeXml(text) + '</prosody>\n' +
+        '  </voice>\n' +
+        '</speak>';
+      const tr = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY,
+          'Content-Type': 'application/ssml+xml',
+          'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
+        },
+        body: ssml
+      });
+      if (!tr.ok) {
+        const errText = await tr.text();
+        console.error('[tts] azure http', tr.status, errText.slice(0, 300));
+        // 任意异常都降级为 mock，让前端退回设备原生 TTS，避免卡顿
+        return send(res, 200, { mock: true, audio: '', note: '云端朗读失败，已退回设备朗读' });
+      }
+      const buf = Buffer.from(await tr.arrayBuffer());
+      return send(res, 200, { audio: buf.toString('base64'), format: 'mp3' });
+    } catch (e) {
+      console.error('[tts] error', e);
+      return send(res, 200, { mock: true, audio: '', note: '云端朗读异常，已退回设备朗读' });
     }
   }
 

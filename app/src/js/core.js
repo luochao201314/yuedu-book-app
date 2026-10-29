@@ -345,22 +345,67 @@
   const TTS = {
     speaking: false,
     voicesReady: false,
+    _audio: null,        // 云端音频播放元素
+    _gen: 0,             // 代际令牌：用于打断“正在路上”的云端朗读
+    _cloud: { ok: null, at: 0 }, // 云端可用性缓存，避免每次点击都白等
     speak(text, rate, opts) {
       const o = opts || {};
       const speed = Math.max(0.5, Math.min(1.4, rate || Store.settings().rate));
+      const isZh = /[一-鿿]/.test(text);
+      const token = ++this._gen; // 本次朗读的令牌
+      // 优先云端神经网络朗读（更自然、不机械）；失败/未配置再退回设备原生 TTS
+      this._speakCloud(text, speed, isZh, token).then((used) => {
+        if (token === this._gen && !used) this._native(text, speed, o, isZh);
+      });
+      return true;
+    },
+    async _speakCloud(text, speed, isZh, token) {
+      // 60s 内曾失败则跳过云端，避免反复白等
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 60000) return false;
+      try {
+        const base = Api.base();
+        if (!base) return false;
+        const lang = isZh ? 'zh-CN' : 'en-US';
+        const r = await Api.req('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text, lang: lang, rate: Math.round(speed * 100) / 100 }),
+        }, 6000); // 6s 超时即退回原生，不卡界面
+        if (token !== this._gen) return false; // 已被新朗读/停止打断，丢弃
+        if (!r || r.mock || !r.audio) {
+          this._cloud = { ok: false, at: Date.now() };
+          return false;
+        }
+        this._cloud.ok = true;
+        this._stopAudio();
+        const el = new Audio('data:audio/mpeg;base64,' + r.audio);
+        this._audio = el;
+        el.play().catch(() => {});
+        return true;
+      } catch (e) {
+        this._cloud = { ok: false, at: Date.now() };
+        return false;
+      }
+    },
+    _stopAudio() {
+      if (this._audio) {
+        try { this._audio.pause(); this._audio.currentTime = 0; } catch (e) {}
+        this._audio = null;
+      }
+    },
+    _native(text, speed, o, isZh) {
       if (Native.available()) {
         try {
-          // 只传 2 个参数，与 Java 桥 speak(String,float) 严格匹配，避免 WebView 找不到方法
+          // 只传 2 个参数，与 Java 桥 speak(String,float) 严格匹配
           Android.speak(text, speed);
-          return true;
+          return;
         } catch (e) {}
       }
       if (!('speechSynthesis' in window)) {
         toast('当前设备不支持朗读');
-        return false;
+        return;
       }
       try {
-        const isZh = /[一-鿿]/.test(text);
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
         u.lang = isZh ? 'zh-CN' : 'en-US';
@@ -374,22 +419,33 @@
             vs.find((v) => /^en/i.test(v.lang));
         if (pick) u.voice = pick;
         window.speechSynthesis.speak(u);
-        return true;
       } catch (e) {
         toast('朗读失败');
-        return false;
       }
     },
     speakWord(w) {
-      TTS.speak(w, 0.75);
+      TTS.speak(w, 0.7);
     },
     stop() {
+      this._gen++; // 让任何在途的云端朗读作废
+      this._stopAudio();
       if (Native.available()) {
         try {
           Android.stopSpeak();
         } catch (e) {}
       }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    },
+    warm() {
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 60000) return;
+      const base = Api.base();
+      if (!base) return;
+      // 唤醒云端朗读路由（尤其 Render 免费实例冷启动），不影响结果
+      fetch(base + '/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello.', lang: 'en-US', rate: 1 }),
+      }).catch(() => {});
     },
   };
 
@@ -442,7 +498,7 @@
             Rec._vad.sil = 0;
           } else if (Rec._vad.has) {
             if (!Rec._vad.sil) Rec._vad.sil = now;
-            if (now - Rec._vad.sil > 1200 && now - Rec._vad.start > 800) {
+            if (now - Rec._vad.sil > 1500 && now - Rec._vad.start > 800) {
               if (Rec.onAutoStop) Rec.onAutoStop();
             }
           }
