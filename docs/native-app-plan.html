@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>悦读绘本 · 原生 iOS/Android 实现方案</title>
+<style>
+  body{margin:0;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;color:#27324A;background:#F4F7FB;line-height:1.7}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  h2{font-size:20px;margin:30px 0 12px;padding-left:10px;border-left:4px solid #FF7A59}
+  h3{font-size:16px;margin:18px 0 8px;color:#5B8DEF}
+  p,li{font-size:14px;color:#3a4860}
+  .sub{color:#7A889E;font-size:14px;margin-bottom:20px}
+  .card{background:#fff;border-radius:14px;padding:18px 20px;box-shadow:0 6px 18px rgba(40,60,100,.08);margin:14px 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+  th,td{border:1px solid #EAEFF6;padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#F3F6FB;color:#5B8DEF;font-weight:700}
+  code{background:#F3F6FB;padding:2px 6px;border-radius:6px;font-size:12px;color:#C0392B}
+  .tag{display:inline-block;background:#EAF1FF;color:#5B8DEF;font-size:11px;padding:2px 9px;border-radius:20px;margin:2px}
+  .warn{background:#FFF4E8;color:#C9762B;border-radius:10px;padding:12px 14px;font-size:13px;margin:12px 0}
+  .ok{background:#EAFaf3;color:#11935f;border-radius:10px;padding:12px 14px;font-size:13px;margin:12px 0}
+  pre{background:#27324A;color:#E6EDF3;padding:14px;border-radius:10px;overflow-x:auto;font-size:12px;line-height:1.5}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
+  .node{background:#fff;border:1px solid #EAEFF6;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:600;box-shadow:0 3px 8px rgba(40,60,100,.06)}
+  .arrow{color:#FF7A59;font-weight:800}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📱 悦读绘本 · 原生 iOS/Android 实现方案</h1>
+  <div class="sub">面向「孩子自主使用」的英语绘本跟读 App ｜ MVP 范围、技术栈、API 接入、数据模型与路线图</div>
+
+  <div class="card">
+    <b>交付定位：</b>本方案说明如何把浏览器原型落为<b>真正的原生 App</b>（SwiftUI + Kotlin/Jetpack Compose），核心难点「跟读评分纠错」「拍照 OCR 录入」均按你选择的<b>成熟 API</b>方案设计，密钥放后端代理、不落端。
+  </div>
+
+  <h2>1. MVP 范围（第一版只做这些）</h2>
+  <div class="card">
+    <span class="tag">绘本库浏览</span><span class="tag">分级筛选</span><span class="tag">领读 TTS</span>
+    <span class="tag">跟读录音</span><span class="tag">发音评分+纠错</span><span class="tag">拍照 OCR 录入</span>
+    <span class="tag">成长记录</span><span class="tag">薄弱点分析</span><span class="tag">打卡/徽章</span>
+    <p style="margin-top:10px"><b>暂不做（V2）：</b>AI 真人纠音视频、社区/UGC、直播课、付费会员体系、多_child 账号切换。</p>
+  </div>
+
+  <h2>2. 技术栈</h2>
+  <table>
+    <tr><th>层</th><th>iOS</th><th>Android</th><th>说明</th></tr>
+    <tr><td>语言/UI</td><td>Swift + SwiftUI</td><td>Kotlin + Jetpack Compose</td><td>声明式 UI，适配平板/手机</td></tr>
+    <tr><td>领读 TTS</td><td><code>AVSpeechSynthesizer</code></td><td><code>TextToSpeech</code>(Google TTS)</td><td>端侧即可，免费、低延迟</td></tr>
+    <tr><td>跟读录音</td><td><code>AVAudioRecorder</code></td><td><code>MediaRecorder</code> / <code>AudioRecord</code></td><td>录 16k/8k 单声道 PCM/WAV 供评测</td></tr>
+    <tr><td>发音评测</td><td colspan="2">后端代理 → 腾讯云/讯飞 语音评测 API</td><td>音素级打分、返回 per-word</td></tr>
+    <tr><td>拍照 OCR</td><td colspan="2">后端代理 → 腾讯云/百度 OCR，或端侧 ML Kit</td><td>识别绘本页文字→建库</td></tr>
+    <tr><td>后端</td><td colspan="2">Node/Go + 对象存储 + 数据库</td><td>密钥托管、资源分发、进度同步</td></tr>
+    <tr><td>存储</td><td>Core Data / Realm</td><td>Room</td><td>本地进度缓存</td></tr>
+    <tr><td>账号/同步</td><td colspan="2">Firebase Auth / 自建 JWT</td><td>亲子共享、多设备</td></tr>
+  </table>
+
+  <h2>3. 系统架构</h2>
+  <div class="card">
+    <div class="flow">
+      <div class="node">📱 原生 App</div><span class="arrow">→</span>
+      <div class="node">🔐 后端代理(藏密钥)</div><span class="arrow">→</span>
+      <div class="node">🗣 语音评测 API</div>
+    </div>
+    <div class="flow">
+      <div class="node">📷 拍照</div><span class="arrow">→</span>
+      <div class="node">🔐 后端代理</div><span class="arrow">→</span>
+      <div class="node">👁 OCR API / ML Kit</div><span class="arrow">→</span>
+      <div class="node">📚 建绘本条目</div>
+    </div>
+    <div class="flow">
+      <div class="node">📊 进度/薄弱点</div><span class="arrow">→</span>
+      <div class="node">☁️ 云端 DB</div><span class="arrow">→</span>
+      <div class="node">👪 家长端看板</div>
+    </div>
+    <div class="warn"><b>安全原则：</b>腾讯云/讯飞/百度的 SecretId/Key <b>绝不放在 App 包里</b>，必须经后端代理签名转发，防止被反编译盗用、产生盗刷费用。</div>
+  </div>
+
+  <h2>4. 核心能力接入（关键代码示意）</h2>
+
+  <h3>4.1 跟读评分（腾讯云 语音评测 Soe / 讯飞 语音评测）</h3>
+  <p>流程：录音(WAV) → 后端上传音频+原文 → 评测服务返回整体分 + 每个单词的准确度 → 端上高亮纠错。</p>
+  <pre>// 后端(Node)伪代码：转发到腾讯云/讯飞，避免密钥暴露
+app.post('/api/score', upload.single('audio'), async (req,res)=>{
+  const { text } = req.body;
+  const audio = req.file.buffer;            // 16k 单声道 wav
+  const r = await soe.evaluate({ text, audio,
+      precision: 'phoneme' });              // 音素级，可定位到字母
+  res.json({ score: r.overall,
+             words: r.words.map(w=>({w:w.word, score:w.accuracy})),
+             fixes: r.words.filter(w=>w.accuracy<75).map(...) });
+});</pre>
+  <table>
+    <tr><th>厂商</th><th>优势</th><th>注意</th></tr>
+    <tr><td>腾讯云 语音评测</td><td>中文厂商、儿童音适配好、按次计费低</td><td>需企业实名</td></tr>
+    <tr><td>讯飞 语音评测</td><td>教育场景成熟、纠音维度全</td><td>额度/商务门槛</td></tr>
+    <tr><td>Azure Pronunciation Assessment</td><td>英文 native 评分准、全球可用</td><td>英文为主、需境外网络</td></tr>
+  </table>
+  <div class="ok">推荐：英文跟读优先 <b>Azure Pronunciation Assessment</b> 或 <b>讯飞英文评测</b>；中文混读再补腾讯云。MVP 先接一家跑通。</div>
+
+  <h3>4.2 拍照 OCR 录入</h3>
+  <pre>// Android(ML Kit 端侧，免费无需联网) 示例
+val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+recognizer.process(image)
+  .addOnSuccessListener { visionText ->
+      val lines = visionText.text.lines()
+      buildBookFromOcr(lines)   // 自动切句、建绘本条目
+  }</pre>
+  <p>也可走云端 OCR（腾讯云/百度）做版面分析，更准但按张计费。<b>端侧 ML Kit 适合 MVP 控制成本</b>。</p>
+
+  <h3>4.3 领读 TTS（端侧免费）</h3>
+  <p>iOS 用 <code>AVSpeechSynthesizer</code>、Android 用 <code>TextToSpeech</code>，选 en-US 女声、语速 0.8x 更适合跟读。无需任何 API。</p>
+
+  <h2>5. 数据模型（核心实体）</h2>
+  <table>
+    <tr><th>实体</th><th>关键字段</th><th>用途</th></tr>
+    <tr><td>Book</td><td>id, series, title, level, coverUrl, pages[]</td><td>绘本库</td></tr>
+    <tr><td>Page / Sentence</td><td>text, translation, audioLeadUrl</td><td>跟读单元</td></tr>
+    <tr><td>PracticeSession</td><td>userId, bookId, sentenceId, score, audioUrl, ts</td><td>成长记录</td></tr>
+    <tr><td>WeakPoint</td><td>userId, word, wrongCount, lastScore</td><td>薄弱点分析</td></tr>
+    <tr><td>UserProgress</td><td>streak, booksDone, totalScore</td><td>打卡/统计</td></tr>
+  </table>
+
+  <h2>6. 页面清单（原生）</h2>
+  <div class="card">
+    <p>① 启动/引导页 ② 绘本库(分级网格) ③ 绘本阅读/跟读页 ④ 评分结果浮层 ⑤ 拍照录入流程 ⑥ 成长看板 ⑦ 薄弱点专练 ⑧ 我的/设置 ⑨（家长端）学习报告</p>
+  </div>
+
+  <h2>7. 资源合规（重要）</h2>
+  <div class="warn">
+    <b>版权红线：</b>牛津阅读树、红火箭、神奇校车均<b>受版权保护</b>，不可直接抓取/分发正文与图。正式上线须：
+    <ul style="margin:6px 0">
+      <li>采购正版授权 / 与出版社合作；或</li>
+      <li>仅接入 <b>公版(Public Domain)</b> 资源（如 Project Gutenberg 儿童公版读物、部分超过版权期的绘本）；或</li>
+      <li>用户<b>自己拍照录入</b>的私有绘本（你已规划此功能，合规且差异化）。</li>
+    </ul>
+    原型中的示例仅用于演示交互，不内含受版权内容。
+  </div>
+
+  <h2>8. MVP 路线图（约 6–8 周）</h2>
+  <table>
+    <tr><th>阶段</th><th>周期</th><th>交付</th></tr>
+    <tr><td>P0 骨架</td><td>1–2 周</td><td>两端项目搭建、绘本库 UI、TTS 领读、本地进度</td></tr>
+    <tr><td>P1 跟读闭环</td><td>2–3 周</td><td>录音 + 一家语音评测接入 + 评分/纠错展示</td></tr>
+    <tr><td>P2 拍照录入</td><td>1–2 周</td><td>ML Kit/OCR 识别 + 自动建库 + 纠错练习</td></tr>
+    <tr><td>P3 成长&上线</td><td>1–2 周</td><td>成长看板、薄弱点、账号同步、TestFlight/内测</td></tr>
+  </table>
+
+  <h2>9. 成本与风险</h2>
+  <div class="card">
+    <p><b>预估月成本（千活跃用户量级）：</b>语音评测 ~¥0.01–0.03/次、OCR ~¥0.005/张、存储与流量几百元/月；端侧 TTS 免费。前期可用免费额度验证。</p>
+    <p><b>主要风险：</b>① 儿童发音评测准确率（需调阈值/多读几次取最优）；② 绘本版权；③ 真机麦克风权限与后台评测延迟。</p>
+  </div>
+
+  <div class="ok">下一步建议：先用今天这份 <b>浏览器原型</b> 验证孩子使用流程与交互，确认后再按本方案启动原生工程；语音评测建议先申请 <b>一家</b> 厂商试用密钥做技术验证。</div>
+</div>
+</body>
+</html>

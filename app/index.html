@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#FF7A59" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<title>悦读绘本 · 英语跟读</title>
+<style>
+  :root{
+    --bg:#F4F7FB; --card:#FFFFFF; --ink:#27324A; --sub:#7A889E;
+    --brand:#FF7A59; --brand2:#5B8DEF; --good:#21B07A; --warn:#F4A93B; --bad:#F26D6D;
+    --pink:#FF6FA5; --yellow:#FFD66B; --purple:#9B7BFF; --green:#43C6A0;
+    --line:#EAEFF6; --shadow:0 8px 24px rgba(40,60,100,.10);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;background:#DFE6F1;font-family:-apple-system,"PingFang SC","Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  .phone{position:relative;max-width:420px;margin:0 auto;min-height:100vh;background:var(--bg);
+    box-shadow:0 0 0 1px #cbd5e6;display:flex;flex-direction:column;overflow:hidden}
+  @media(min-width:480px){.phone{margin:24px auto;min-height:860px;border-radius:34px;box-shadow:0 30px 80px rgba(30,50,90,.25),0 0 0 10px #11151c,0 0 0 12px #2a3140}}
+  .screen{flex:1;overflow-y:auto;padding:18px 16px 92px;display:none}
+  .screen.active{display:block}
+  h1,h2,h3{margin:0}
+  .topbar{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .topbar .title{font-size:20px;font-weight:800;letter-spacing:.5px}
+  .topbar .avatar{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--pink));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;margin-left:auto}
+  .sub{color:var(--sub);font-size:13px;margin-bottom:14px}
+  .hero{background:linear-gradient(135deg,#FF8A6B,#FF6FA5);color:#fff;border-radius:20px;padding:16px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .hero h2{font-size:18px}
+  .hero p{margin:6px 0 0;font-size:13px;opacity:.95}
+  .hero .stars{margin-top:10px;font-size:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .book{background:var(--card);border-radius:18px;padding:10px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s}
+  .book:active{transform:scale(.97)}
+  .book .cover{height:96px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:40px;color:#fff;position:relative;overflow:hidden}
+  .book .cover .lvl{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.28);color:#fff;font-size:10px;padding:2px 7px;border-radius:20px}
+  .book .cover .prog{position:absolute;bottom:6px;left:6px;right:6px;height:5px;background:rgba(255,255,255,.35);border-radius:5px;overflow:hidden}
+  .book .cover .prog i{display:block;height:100%;background:#fff}
+  .book .name{font-size:13px;font-weight:700;margin-top:8px;line-height:1.25}
+  .book .series{font-size:11px;color:var(--sub);margin-top:2px}
+  .back{display:inline-flex;align-items:center;gap:6px;color:var(--brand2);font-weight:700;font-size:14px;margin-bottom:8px;cursor:pointer}
+  .reader-cover{height:150px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:64px;color:#fff;margin-bottom:12px;box-shadow:var(--shadow)}
+  .page-tag{display:inline-block;background:var(--line);color:var(--sub);font-size:11px;padding:3px 10px;border-radius:20px;margin-bottom:10px}
+  .sentence{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow)}
+  .sentence .en{font-size:19px;font-weight:700;line-height:1.4;letter-spacing:.3px}
+  .sentence .zh{font-size:13px;color:var(--sub);margin-top:4px}
+  .sentence .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .btn{border:none;border-radius:12px;padding:10px 14px;font-size:14px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .btn:active{transform:scale(.96)}
+  .btn.lead{background:#EAF1FF;color:var(--brand2)}
+  .btn.follow{background:linear-gradient(135deg,var(--brand),var(--pink));color:#fff}
+  .btn.rec{background:var(--bad);color:#fff}
+  .btn.ghost{background:var(--line);color:var(--sub)}
+  .score-pill{display:inline-flex;align-items:center;gap:6px;background:#EAFaf3;color:var(--good);font-weight:800;padding:6px 12px;border-radius:20px;font-size:14px}
+  .score-pill.low{background:#FDEEEE;color:var(--bad)}
+  .words{margin-top:10px;font-size:18px;line-height:1.7;font-weight:600}
+  .w.good{color:var(--good)}
+  .w.mid{color:var(--warn)}
+  .w.bad{color:var(--bad);text-decoration:underline wavy var(--bad)}
+  .fix{margin-top:8px;font-size:13px;color:var(--bad);background:#FDEEEE;border-radius:10px;padding:8px 10px;display:none}
+  .fix.show{display:block}
+  .rec-dot{width:10px;height:10px;border-radius:50%;background:#fff;animation:pulse 1s infinite}
+  @keyframes pulse{0%{opacity:1}50%{opacity:.3}100%{opacity:1}}
+  .stat-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px}
+  .stat{background:var(--card);border-radius:16px;padding:12px;text-align:center;box-shadow:var(--shadow)}
+  .stat b{display:block;font-size:22px;font-weight:800;color:var(--brand2)}
+  .stat span{font-size:11px;color:var(--sub)}
+  .card{background:var(--card);border-radius:18px;padding:16px;box-shadow:var(--shadow);margin-bottom:14px}
+  .card h3{font-size:15px;margin-bottom:10px}
+  .weak-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .weak-item:last-child{border-bottom:none}
+  .weak-word{font-weight:800;font-size:16px;width:90px}
+  .weak-bar{flex:1;height:8px;background:var(--line);border-radius:8px;overflow:hidden}
+  .weak-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--bad),var(--warn))}
+  .weak-times{font-size:12px;color:var(--sub);width:60px;text-align:right}
+  .empty{color:var(--sub);font-size:13px;text-align:center;padding:18px 0}
+  .nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:420px;
+    background:#fff;border-top:1px solid var(--line);display:flex;padding:8px 0 10px;z-index:20}
+  @media(min-width:480px){.nav{border-radius:0 0 34px 34px}}
+  .nav button{flex:1;background:none;border:none;color:var(--sub);font-size:11px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;font-weight:600}
+  .nav button .ic{font-size:20px}
+  .nav button.on{color:var(--brand)}
+  .mask{position:fixed;inset:0;background:rgba(20,30,50,.5);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .mask.show{display:flex}
+  .modal{background:#fff;border-radius:20px;padding:18px;width:100%;max-width:360px;box-shadow:var(--shadow)}
+  .modal h3{font-size:16px;margin-bottom:10px}
+  .modal p{font-size:13px;color:var(--sub);line-height:1.5}
+  .dropzone{border:2px dashed var(--brand2);border-radius:14px;padding:22px 10px;text-align:center;color:var(--brand2);font-weight:700;margin:12px 0;cursor:pointer}
+  .dropzone small{display:block;color:var(--sub);font-weight:400;margin-top:6px}
+  .ocr-preview{font-size:14px;background:var(--line);border-radius:12px;padding:12px;margin:10px 0;line-height:1.6}
+  .tag{display:inline-block;background:#EAF1FF;color:var(--brand2);font-size:11px;padding:2px 8px;border-radius:20px;margin:2px}
+  .toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:#27324A;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;opacity:0;transition:opacity .25s;z-index:80;pointer-events:none}
+  .toast.show{opacity:1}
+  .badge-api{display:inline-block;background:#FFF4E8;color:#C9762B;font-size:10px;padding:2px 7px;border-radius:6px;margin-left:6px;vertical-align:middle}
+  .note{font-size:11px;color:var(--sub);background:#F3F6FB;border-radius:10px;padding:8px 10px;margin-top:10px;line-height:1.5}
+  .setting-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;cursor:pointer;border-bottom:1px solid var(--line)}
+  .setting-row:last-child{border-bottom:none}
+  .setting-row .val{color:var(--brand2);font-weight:700;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal input{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px;margin:10px 0}
+</style>
+</head>
+<body>
+<div class="phone">
+  <!-- ============ 绘本库 ============ -->
+  <section class="screen active" id="s-library">
+    <div class="topbar">
+      <div class="title">📚 绘本库</div>
+      <div class="avatar" id="avatar">小宝</div>
+    </div>
+    <div class="hero">
+      <h2>今天想读哪一本？ 🌟</h2>
+      <p>点开绘本，跟着外教声音读，读错我会帮你标出来～</p>
+      <div class="stars">⭐ 连续打卡 <b id="streak">0</b> 天</div>
+    </div>
+    <div class="sub">分级读物 · 跟读闯关</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <button class="btn ghost" style="flex:1" onclick="syncBooks()">🌐 同步公版绘本</button>
+      <span id="apiStatus" style="font-size:12px;color:#F4A93B">🟡 检测中…</span>
+    </div>
+    <div class="grid" id="bookGrid"></div>
+    <div class="note">原型说明：示例绘本仅用于演示交互，正式上线须使用已授权或公版（Public Domain）资源，避免版权风险。</div>
+  </section>
+
+  <!-- ============ 阅读/跟读 ============ -->
+  <section class="screen" id="s-reader">
+    <div class="back" onclick="go('library')">← 返回绘本库</div>
+    <div class="reader-cover" id="readerCover">📖</div>
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div class="page-tag" id="bookName">—</div>
+      <button class="btn ghost" onclick="openOCR()" style="padding:8px 12px">📷 拍照录入</button>
+    </div>
+    <div id="sentenceList"></div>
+  </section>
+
+  <!-- ============ 成长 ============ -->
+  <section class="screen" id="s-growth">
+    <div class="topbar"><div class="title">🌱 我的成长</div></div>
+    <div class="stat-row">
+      <div class="stat"><b id="st-books">0</b><span>读完绘本</span></div>
+      <div class="stat"><b id="st-sent">0</b><span>跟读句数</span></div>
+      <div class="stat"><b id="st-score">0</b><span>平均得分</span></div>
+    </div>
+    <div class="card">
+      <h3>📈 近 7 天得分趋势</h3>
+      <div id="chart"></div>
+    </div>
+    <div class="card">
+      <h3>🎯 薄弱点（最常读错的词）</h3>
+      <div id="weakList"></div>
+    </div>
+    <div class="card">
+      <h3>🏆 最近成就</h3>
+      <div id="achList" class="empty">多读几本就能解锁徽章啦！</div>
+    </div>
+    <div class="note">成长数据保存在本机（localStorage）。正式 App 会同步到云端账号，支持多设备与亲子共享。</div>
+  </section>
+
+  <!-- ============ 我的 ============ -->
+  <section class="screen" id="s-me">
+    <div class="topbar"><div class="title">👤 我的</div></div>
+    <div class="hero" style="background:linear-gradient(135deg,#5B8DEF,#9B7BFF)">
+      <h2 id="meName">小宝</h2>
+      <p>小学阶段 · 英语启蒙</p>
+    </div>
+    <div class="card">
+      <h3>⚙️ 设置</h3>
+      <div class="setting-row" onclick="openBackend()">
+        <span>🔗 后端地址（真实接口）</span>
+        <span class="val" id="backendShort">未设置</span>
+      </div>
+      <div style="font-size:14px;color:var(--sub);line-height:2">
+        🔊 领读语音：<b>美式女声</b><br/>
+        🎚 跟读难度：<b>标准</b><br/>
+        📷 拍照识别引擎：<b>腾讯云 OCR</b> <span class="badge-api">API</span><br/>
+        🎙 发音评测：<b>腾讯云/讯飞 语音评测</b> <span class="badge-api">API</span>
+      </div>
+    </div>
+    <div class="note">未配置后端时，评分为<b>模拟演示</b>、拍照为模拟识别；在「后端地址」填入你部署的服务器（需 https，返回真实接口）即可启用真实评分与 OCR。安卓 App 离线默认使用演示模式。</div>
+  </section>
+
+  <!-- bottom nav -->
+  <nav class="nav">
+    <button class="on" data-go="library"><span class="ic">📚</span>绘本库</button>
+    <button data-go="growth"><span class="ic">🌱</span>成长</button>
+    <button data-go="me"><span class="ic">👤</span>我的</button>
+  </nav>
+
+  <!-- OCR modal -->
+  <div class="mask" id="ocrMask">
+    <div class="modal">
+      <h3>📷 拍照录入绘本 <span class="badge-api">OCR</span></h3>
+      <p>对准绘本页面拍一张，我会识别文字、自动生成跟读句子并建立到你的绘本库。</p>
+      <div class="dropzone" id="dropzone" onclick="pickImage()">
+        📸 点击拍照 / 选择图片
+        <small>原型演示：选择图片后将模拟识别结果</small>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none" onchange="onImage(event)" />
+      <div class="ocr-preview" id="ocrPreview" style="display:none"></div>
+      <div id="ocrTags" style="margin-bottom:8px"></div>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <button class="btn ghost" style="flex:1" onclick="closeOCR()">取消</button>
+        <button class="btn follow" id="ocrSave" style="flex:1;display:none">✅ 存入绘本库</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 后端设置 modal -->
+  <div class="mask" id="beModal">
+    <div class="modal">
+      <h3>🔗 后端地址（真实接口）</h3>
+      <p>填入你部署的服务器地址（需 https，详见 android-build.md）。留空则使用离线演示模式。</p>
+      <input id="beInput" type="url" placeholder="https://your-server.example.com" />
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" style="flex:1" onclick="resetBackend()">恢复演示</button>
+        <button class="btn follow" style="flex:1" onclick="saveBackend()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+/* =========================================================
+   悦读绘本 · 可安装 PWA / 安卓 WebView 共用页面
+   真实能力接入点：
+     - 领读：window.speechSynthesis（端侧 TTS，真实可用）
+     - 跟读录音：WAV 16k 单声道（Azure 发音评测要求）
+     - 发音评分/纠错：assessPronunciation() 调后端 /api/score（无密钥降级模拟）
+     - 拍照录入 OCR：runOCR() 调后端 /api/ocr（无密钥降级模拟）
+   ========================================================= */
+
+/* ---------- 示例绘本数据（演示用，正式须用授权/公版资源） ---------- */
+const BOOKS = [
+  { id:'ort', title:'Floppy 的骨头', titleEn:"Floppy's Bone", series:'牛津阅读树 Oxford', level:'L1', color:'#FF7A59',
+    pages:[
+      { emoji:'🐶', sentences:[
+        {en:"Look at Floppy.", zh:"看 Floppy。"},
+        {en:"Floppy has a bone.", zh:"Floppy 有一根骨头。"},
+        {en:"The bone is big.", zh:"骨头很大。"}
+      ]},
+      { emoji:'🦴', sentences:[
+        {en:"Floppy runs to the bone.", zh:"Floppy 跑向骨头。"},
+        {en:"He is happy.", zh:"他很开心。"}
+      ]}
+    ]},
+  { id:'rr', title:'太阳 Sun', titleEn:'Sun', series:'红火箭 Red Rocket', level:'L1', color:'#F4A93B',
+    pages:[
+      { emoji:'☀️', sentences:[
+        {en:"The sun is hot.", zh:"太阳很热。"},
+        {en:"The sun is yellow.", zh:"太阳是黄色的。"},
+        {en:"I see the sun.", zh:"我看见太阳了。"}
+      ]}
+    ]},
+  { id:'msb', title:'神奇校车·海洋', titleEn:'The Magic School Bus: Ocean', series:'神奇校车 Magic School Bus', level:'L3', color:'#5B8DEF',
+    pages:[
+      { emoji:'🐠', sentences:[
+        {en:"The bus turns into a fish.", zh:"校车变成了一条鱼。"},
+        {en:"We swim in the blue ocean.", zh:"我们在蓝色海洋里游泳。"},
+        {en:"A whale is very big.", zh:"鲸鱼非常大。"}
+      ]}
+    ]},
+  { id:'bb', title:'棕色的熊 Brown Bear', titleEn:'Brown Bear', series:'经典儿歌绘本', level:'L1', color:'#9B7BFF',
+    pages:[
+      { emoji:'🐻', sentences:[
+        {en:"Brown bear, brown bear.", zh:"棕色的熊，棕色的熊。"},
+        {en:"What do you see?", zh:"你看到了什么？"}
+      ]}
+    ]}
+];
+
+/* ---------- 后端 API 配置（APK 离线默认演示） ---------- */
+const IS_APK = location.hostname && location.hostname.indexOf('appassets.androidplatform.net') >= 0;
+function getBackend(){
+  const s = localStorage.getItem('backendUrl');
+  if(s && s.trim()) return s.trim().replace(/\/$/, '');
+  if(IS_APK) return '';                                   // 安卓离线：演示模式
+  if(location.protocol === 'file:') return 'http://localhost:3000';
+  return location.origin;                                 // 同源（由后端托管）
+}
+let API_BASE = getBackend();
+let BACKEND_OK = false;
+
+function findSentence(idx){
+  const parts=idx.split('-');
+  const si=Number(parts.pop()); const pi=Number(parts.pop()); const id=parts.join('-');
+  const b=BOOKS.find(x=>x.id===id); if(!b) return null;
+  return (b.pages[pi] && b.pages[pi].sentences[si]) || null;
+}
+
+/* WAV 录音（Azure 发音评测要求 16k 单声道 PCM） */
+let recAC=null, recNode=null, recSrc=null, recChunks=[], recStream=null, recIdx=null;
+async function startWav(){
+  recStream = await navigator.mediaDevices.getUserMedia({audio:true});
+  const AC = window.AudioContext || window.webkitAudioContext;
+  recAC = new AC({sampleRate:16000});
+  recSrc = recAC.createMediaStreamSource(recStream);
+  recNode = recAC.createScriptProcessor(4096,1,1);
+  recChunks=[];
+  recNode.onaudioprocess = e => { recChunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  recSrc.connect(recNode); recNode.connect(recAC.destination);
+}
+function stopWav(){
+  return new Promise(res=>{
+    try{ recNode.disconnect(); recSrc.disconnect(); }catch(e){}
+    recStream.getTracks().forEach(t=>t.stop());
+    let len=recChunks.reduce((a,c)=>a+c.length,0);
+    const buf=new Float32Array(len); let o=0; recChunks.forEach(c=>{buf.set(c,o);o+=c.length;});
+    recAC.close(); recAC=null; recNode=null; recSrc=null;
+    res(encodeWAV(buf,16000));
+  });
+}
+function encodeWAV(samples,rate){
+  const b=new ArrayBuffer(44+samples.length*2); const v=new DataView(b);
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  ws(0,'RIFF'); v.setUint32(4,36+samples.length*2,true); ws(8,'WAVE');
+  ws(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,rate,true); v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  ws(36,'data'); v.setUint32(40,samples.length*2,true);
+  let o=44; for(let i=0;i<samples.length;i++){const s=Math.max(-1,Math.min(1,samples[i]));v.setInt16(o,s<0?s*0x8000:s*0x7FFF,true);o+=2;}
+  return b;
+}
+function blobToBase64(blob){
+  return new Promise(r=>{ const fr=new FileReader();
+    fr.onload=()=>{ const m=fr.result.indexOf(','); r(fr.result.slice(m+1)); };
+    fr.readAsDataURL(blob); });
+}
+
+/* 后端连接状态检测 + 公版绘本同步 */
+async function checkBackend(){
+  const el=document.getElementById('apiStatus');
+  if(!API_BASE){
+    BACKEND_OK=false;
+    if(el){ el.textContent='🟡 离线演示模式（可在「我的」设置后端地址）'; el.style.color='#F4A93B'; }
+    return;
+  }
+  try{
+    const r=await fetch(API_BASE+'/api/health',{cache:'no-store'});
+    const j=await r.json(); BACKEND_OK = !!(r.ok && (j.azure||j.ocr));
+  }catch(e){ BACKEND_OK=false; }
+  const el2=document.getElementById('apiStatus');
+  if(el2){ el2.textContent = BACKEND_OK ? '🟢 已连接真实接口' : '🟡 演示模式（未配密钥，评分/OCR 用模拟）';
+    el2.style.color = BACKEND_OK ? '#21B07A' : '#F4A93B'; }
+}
+async function syncBooks(){
+  if(!API_BASE){ toast('请先在「我的」设置后端地址，再同步公版绘本'); return; }
+  try{
+    const r=await fetch(API_BASE+'/api/books',{cache:'no-store'}); if(!r.ok) throw 0;
+    const list=await r.json();
+    list.forEach(b=>{ if(!BOOKS.find(x=>x.id==='g'+b.id)){
+      BOOKS.push({id:'g'+b.id, title:b.title, titleEn:b.titleEn, series:'公版 · '+b.author,
+        level:b.level||'L?', color:'#43C6A0', emoji:'📜',
+        gutenberg:b.url, pages:[{emoji:'📜',sentences:[{en:b.intro||'Public domain book.',zh:'（公版绘本）'}]}]});
+    }});
+    renderLibrary(); toast('已同步 '+list.length+' 本公版绘本 📚');
+  }catch(e){ toast('同步失败：请检查后端地址是否可达'); }
+}
+
+/* ---------- 后端地址设置 ---------- */
+function openBackend(){ document.getElementById('beInput').value = localStorage.getItem('backendUrl')||''; document.getElementById('beModal').classList.add('show'); }
+function closeBackend(){ document.getElementById('beModal').classList.remove('show'); }
+function saveBackend(){
+  const v=document.getElementById('beInput').value.trim();
+  if(v){ localStorage.setItem('backendUrl', v.replace(/\/$/,'')); } else { localStorage.removeItem('backendUrl'); }
+  API_BASE=getBackend();
+  document.getElementById('backendShort').textContent = v ? (v.length>18? v.slice(0,18)+'…':v) : '未设置';
+  closeBackend(); checkBackend(); toast('已保存，正在检测连接…');
+}
+function resetBackend(){ localStorage.removeItem('backendUrl'); API_BASE=getBackend();
+  document.getElementById('backendShort').textContent='未设置'; closeBackend(); checkBackend(); toast('已恢复离线演示模式'); }
+
+/* ---------- 本地存储（成长/薄弱点） ---------- */
+const LS_KEY='yuedu_progress_v1';
+function load(){ try{return JSON.parse(localStorage.getItem(LS_KEY))||{sessions:[],weak:{},booksDone:{}}}catch(e){return {sessions:[],weak:{},booksDone:{}}} }
+function save(d){ localStorage.setItem(LS_KEY, JSON.stringify(d)); }
+let DATA = load();
+
+/* ---------- 屏幕切换 ---------- */
+function go(screen){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('s-'+screen).classList.add('active');
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on', b.dataset.go===screen));
+  if(screen==='growth') renderGrowth();
+  window.scrollTo(0,0);
+}
+document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.go));
+
+/* ---------- 绘本库渲染 ---------- */
+function renderLibrary(){
+  const grid=document.getElementById('bookGrid'); grid.innerHTML='';
+  BOOKS.forEach(b=>{
+    const done=DATA.booksDone[b.id]||0;
+    const total=b.pages.reduce((a,p)=>a+p.sentences.length,0);
+    const pct= total? Math.round(done/total*100):0;
+    const el=document.createElement('div'); el.className='book';
+    el.innerHTML=`<div class="cover" style="background:linear-gradient(135deg,${b.color},${shade(b.color)})">
+        <span class="lvl">${b.level}</span>${b.emoji||'📖'}
+        <span class="prog"><i style="width:${pct}%"></i></span></div>
+      <div class="name">${b.title}</div><div class="series">${b.series}</div>`;
+    el.onclick=()=>openReader(b.id);
+    grid.appendChild(el);
+  });
+  document.getElementById('streak').textContent = calcStreak();
+}
+function shade(hex){
+  const c=hex.replace('#',''); const n=parseInt(c,16);
+  const r=Math.max(0,(n>>16)-30),g=Math.max(0,((n>>8)&255)-30),b=Math.max(0,(n&255)-30);
+  return `rgb(${r},${g},${b})`;
+}
+
+/* ---------- 阅读/跟读 ---------- */
+let CURRENT=null;
+async function openReader(id){
+  const b=BOOKS.find(x=>x.id===id); CURRENT=b;
+  document.getElementById('readerCover').textContent=b.emoji||'📖';
+  document.getElementById('readerCover').style.background=`linear-gradient(135deg,${b.color},${shade(b.color)})`;
+  document.getElementById('bookName').textContent=`${b.title} · ${b.series}`;
+  const list=document.getElementById('sentenceList'); list.innerHTML='<div class="empty">加载中…</div>';
+  if(b.gutenberg){ await loadGutenberg(b); }
+  list.innerHTML='';
+  b.pages.forEach((pg,pi)=>{
+    pg.sentences.forEach((s,si)=>{
+      const idx=`${id}-${pi}-${si}`;
+      const card=document.createElement('div'); card.className='sentence';
+      card.innerHTML=`
+        <div class="en">${s.en}</div>
+        <div class="zh">${s.zh}</div>
+        <div class="actions">
+          <button class="btn lead" onclick="lead('${idx}')">🔊 领读</button>
+          <button class="btn follow" id="rec-${idx}" onclick="follow('${idx}')">🎤 跟读</button>
+          <span id="score-${idx}"></span>
+        </div>
+        <div class="words" id="words-${idx}"></div>
+        <div class="fix" id="fix-${idx}"></div>`;
+      list.appendChild(card);
+    });
+  });
+  go('reader');
+}
+
+/* 拉取 Gutenberg 公版正文并分句（真实接口，失败降级） */
+async function loadGutenberg(b){
+  if(!API_BASE){ return; } // 离线演示不拉取
+  try{
+    const r=await fetch(b.gutenberg); const t=await r.text();
+    let body=t; const m=body.indexOf('START OF TH'); if(m>0) body=body.slice(m);
+    const cleaned=body.replace(/[\r\n]+/g,' ').replace(/\s+/g,' ');
+    const parts=cleaned.split(/(?<=\.)\s+/).map(s=>s.trim()).filter(s=>s.length>12 && /[a-zA-Z]{4}/.test(s)).slice(0,10);
+    if(parts.length) b.pages=[{emoji:'📜',sentences:parts.map(p=>({en:p,zh:'（公版原文）'}))}];
+  }catch(e){ /* 保留默认 intro */ }
+}
+
+/* 领读：真实 TTS */
+function lead(idx){
+  const s=findSentence(idx); if(!s) return;
+  if(!('speechSynthesis' in window)){ toast('当前浏览器不支持语音'); return; }
+  window.speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(s.en);
+  u.lang='en-US'; u.rate=0.85; u.pitch=1.05;
+  const v=window.speechSynthesis.getVoices().find(x=>/en[-_]US/i.test(x.lang)&&/female|woman|samantha|zira|google/i.test(x.name));
+  if(v) u.voice=v;
+  window.speechSynthesis.speak(u);
+}
+
+/* 跟读：真实 WAV 录音 → 调用后端评分（无密钥时降级模拟） */
+async function follow(idx){
+  const btn=document.getElementById('rec-'+idx);
+  if(recAC && recNode){
+    btn.className='btn follow'; btn.innerHTML='🎤 跟读';
+    const wav=await stopWav();
+    const result=await assessPronunciation(findSentence(idx).en, wav);
+    showScore(idx,result); recordResult(idx,result);
+    return;
+  }
+  try{
+    await startWav(); recIdx=idx;
+    btn.className='btn rec'; btn.innerHTML='<span class="rec-dot"></span> 停止';
+  }catch(e){ toast('无法访问麦克风，请在浏览器允许'); }
+}
+
+/* 发音评分：优先调后端真实接口，失败/未配置则降级模拟 */
+async function assessPronunciation(text, wavBuffer){
+  if(BACKEND_OK && API_BASE){
+    try{
+      const b64=await blobToBase64(new Blob([wavBuffer],{type:'audio/wav'}));
+      const r=await fetch(API_BASE+'/api/score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,audio:b64})});
+      if(r.ok){ const j=await r.json(); if(!j.mock) return j; }
+    }catch(e){ /* 降级 */ }
+  }
+  await new Promise(r=>setTimeout(r,600));
+  const words=text.replace(/[.,?!]/g,'').split(' ').filter(Boolean);
+  const out=words.map(w=>({w:w.toLowerCase(),score:Math.round(55+Math.random()*45)}));
+  const avg=Math.round(out.reduce((a,b)=>a+b.score,0)/out.length);
+  return {score:avg, words:out, fixes:out.filter(o=>o.score<75).map(o=>`「${o.w}」发音再练练，注意元音`)};
+}
+
+function showScore(idx,res){
+  const sp=document.getElementById('score-'+idx);
+  sp.className='score-pill'+(res.score<75?' low':'');
+  sp.innerHTML=`${res.score<75?'😣':'🎉'} ${res.score}分`;
+  const wd=document.getElementById('words-'+idx); wd.innerHTML='';
+  res.words.forEach(o=>{
+    const cls=o.score>=90?'good':o.score>=75?'mid':'bad';
+    const span=document.createElement('span'); span.className='w '+cls;
+    span.textContent=o.w+' '; wd.appendChild(span);
+  });
+  const fx=document.getElementById('fix-'+idx);
+  if(res.fixes.length){ fx.classList.add('show'); fx.innerHTML='🔧 纠错：'+res.fixes.join('；'); }
+  else{ fx.classList.remove('show'); }
+}
+
+/* 记录成长 + 薄弱点 */
+function recordResult(idx,res){
+  const b=BOOKS.find(x=>x.id===idx.split('-')[0]);
+  const today=new Date().toISOString().slice(0,10);
+  DATA.sessions.push({date:today, book:b.title, score:res.score});
+  res.words.filter(o=>o.score<80).forEach(o=>{ DATA.weak[o.w]=(DATA.weak[o.w]||0)+1; });
+  DATA.booksDone[b.id]=(DATA.booksDone[b.id]||0)+1;
+  save(DATA);
+  renderLibrary();
+  toast('已记录 ✅ 平均 '+res.score+' 分');
+}
+
+/* ---------- 成长页面 ---------- */
+function renderGrowth(){
+  const books=new Set(DATA.sessions.map(s=>s.book)).size;
+  const sent=DATA.sessions.length;
+  const avg= sent? Math.round(DATA.sessions.reduce((a,s)=>a+s.score,0)/sent):0;
+  document.getElementById('st-books').textContent=books;
+  document.getElementById('st-sent').textContent=sent;
+  document.getElementById('st-score').textContent=avg;
+
+  const days=[],labels=[];
+  for(let i=6;i>=0;i--){ const d=new Date(Date.now()-i*864e5).toISOString().slice(0,10);
+    const arr=DATA.sessions.filter(s=>s.date===d);
+    days.push(arr.length?Math.round(arr.reduce((a,s)=>a+s.score,0)/arr.length):0);
+    labels.push(d.slice(5)); }
+  drawChart(days,labels);
+
+  const wl=document.getElementById('weakList'); wl.innerHTML='';
+  const weak=Object.entries(DATA.weak).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  if(!weak.length){ wl.innerHTML='<div class="empty">还没有薄弱点，继续加油！🌟</div>'; }
+  else weak.forEach(([w,n])=>{
+    const pct=Math.min(100, n*20);
+    const el=document.createElement('div'); el.className='weak-item';
+    el.innerHTML=`<span class="weak-word">${w}</span><span class="weak-bar"><i style="width:${pct}%"></i></span><span class="weak-times">错 ${n} 次</span>`;
+    wl.appendChild(el);
+  });
+
+  const al=document.getElementById('achList');
+  const ach=[];
+  if(sent>=1) ach.push('🌟 完成第一次跟读');
+  if(books>=1) ach.push('📚 读完第一本绘本');
+  if(avg>=85) ach.push('🏅 发音小达人（均分85+）');
+  if(weak.length===0&&sent>=3) ach.push('💎 零薄弱点勋章');
+  al.innerHTML= ach.length? ach.map(a=>`<div style="padding:6px 0;font-weight:600">${a}</div>`).join('') : '<div class="empty">多读几本就能解锁徽章啦！</div>';
+}
+function drawChart(days,labels){
+  const W=320,H=120,max=100,pad=18;
+  const bw=(W-pad*2)/days.length;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:340px">`;
+  svg+=`<line x1="${pad}" y1="${H-20}" x2="${W-pad}" y2="${H-20}" stroke="#EAEFF6"/>`;
+  days.forEach((v,i)=>{
+    const h=(v/max)*(H-40); const x=pad+i*bw+bw/2-10; const y=H-20-h;
+    const col=v>=85?'#21B07A':v>=70?'#F4A93B':'#F26D6D';
+    svg+=`<rect x="${x}" y="${y}" width="20" height="${h}" rx="5" fill="${col}"/>`;
+    svg+=`<text x="${x+10}" y="${y-4}" font-size="9" fill="#7A889E" text-anchor="middle">${v}</text>`;
+    svg+=`<text x="${x+10}" y="${H-6}" font-size="9" fill="#7A889E" text-anchor="middle">${labels[i]}</text>`;
+  });
+  svg+=`</svg>`;
+  document.getElementById('chart').innerHTML=svg;
+}
+function calcStreak(){
+  const set=[...new Set(DATA.sessions.map(s=>s.date))].sort();
+  let st=0; for(let i=0;i<set.length;i++){ const d=new Date(set[i]); const p=new Date(Date.now()-(st+1)*864e5).toISOString().slice(0,10);
+    if(set.includes(p)|| i===0 && set[0]===new Date(Date.now()).toISOString().slice(0,10)) st++; else break; }
+  return st;
+}
+
+/* ---------- 拍照录入 OCR ---------- */
+function openOCR(){ document.getElementById('ocrMask').classList.add('show'); }
+function closeOCR(){ document.getElementById('ocrMask').classList.remove('show');
+  document.getElementById('ocrPreview').style.display='none';
+  document.getElementById('ocrTags').innerHTML='';
+  document.getElementById('ocrSave').style.display='none'; }
+function pickImage(){ document.getElementById('fileInput').click(); }
+function onImage(e){
+  const f=e.target.files[0]; if(!f) return;
+  const name=f.name||'绘本页';
+  document.getElementById('ocrPreview').style.display='block';
+  document.getElementById('ocrPreview').innerHTML='🖼 已选择：'+name+'<br/><span style="color:#7A889E">正在识别文字…</span>';
+  runOCR(f).then(res=>{
+    document.getElementById('ocrPreview').innerHTML='✅ 识别到的文字：<br/>'+res.text;
+    const tags=document.getElementById('ocrTags');
+    tags.innerHTML='自动建库标签：'+res.tags.map(t=>`<span class="tag">${t}</span>`).join('');
+    const saveBtn=document.getElementById('ocrSave'); saveBtn.style.display='inline-block';
+    saveBtn.onclick=()=>{ toast('已存入绘本库（演示）'); closeOCR(); };
+  });
+}
+/* OCR：优先调后端真实接口，失败/未配置则降级模拟 */
+async function runOCR(file){
+  if(BACKEND_OK && API_BASE){
+    try{
+      const b64=await blobToBase64(file);
+      const r=await fetch(API_BASE+'/api/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64,language:'eng'})});
+      if(r.ok){ const j=await r.json(); if(!j.mock) return {text:j.text,tags:j.tags||['识别结果']}; }
+    }catch(e){ /* 降级 */ }
+  }
+  await new Promise(r=>setTimeout(r,800));
+  return { text:'The cat is on the mat. / The dog runs fast.', tags:['L1','动物','短句跟读'] };
+}
+
+/* ---------- 工具 ---------- */
+let toastT=null;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1800); }
+
+/* ---------- 初始化 ---------- */
+document.getElementById('backendShort').textContent = API_BASE ? (API_BASE.length>18? API_BASE.slice(0,18)+'…':API_BASE) : '未设置';
+renderLibrary();
+checkBackend();
+
+/* 注册 Service Worker（仅浏览器/PWA，APK 内不注册） */
+if('serviceWorker' in navigator && location.protocol.startsWith('http') && !IS_APK){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Render Blueprint 一键部署配置
+# 用法：render.com → New → Blueprint → 连接本 GitHub 仓库 → 按提示填写密钥即可
+# 部署完成后会得到一个 https://xxx.onrender.com 地址，填进 App「我的 → 后端地址」即可启用真实接口。
+services:
+  - type: web
+    name: yuedu-book-backend
+    runtime: node
+    rootDir: server            # 服务根目录指向 server/
+    plan: free                 # 免费档（含 https）；闲置会自动休眠，首次访问稍慢
+    region: singapore          # 离国内最近的区域；也可选 oregon / frankfurt
+    buildCommand: "echo skip-build"
+    startCommand: "npm start"
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "18"
+      - key: AZURE_SPEECH_REGION
+        value: "eastasia"       # 与你在 Azure 建资源时选的区域一致
+      - key: AZURE_SPEECH_KEY   # 部署时 Render 面板会让你填写（sync:false 不入库）
+        sync: false
+      - key: OCR_SPACE_KEY       # 同上
+        sync: false
+# 注意：PORT 由 Render 自动注入，server.js 已用 process.env.PORT 读取，无需在此设置。

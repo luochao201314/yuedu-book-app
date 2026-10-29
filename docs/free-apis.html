@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>免费 API 清单 · 悦读绘本</title>
+<style>
+  body{margin:0;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;color:#27324A;background:#F4F7FB;line-height:1.7}
+  .wrap{max-width:900px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:25px;margin:0 0 6px}
+  .sub{color:#7A889E;font-size:14px;margin-bottom:18px}
+  h2{font-size:19px;margin:30px 0 10px;padding-left:10px;border-left:4px solid #FF7A59}
+  .card{background:#fff;border-radius:14px;padding:16px 18px;box-shadow:0 6px 18px rgba(40,60,100,.08);margin:12px 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}
+  th,td{border:1px solid #EAEFF6;padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#F3F6FB;color:#5B8DEF;font-weight:700}
+  code{background:#F3F6FB;padding:2px 6px;border-radius:6px;font-size:12px;color:#C0392B}
+  .tag{display:inline-block;background:#EAF1FF;color:#5B8DEF;font-size:11px;padding:2px 9px;border-radius:20px;margin:2px}
+  .best{background:#EAFaf3;color:#11935f;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700}
+  .warn{background:#FFF4E8;color:#C9762B;border-radius:10px;padding:12px 14px;font-size:13px;margin:12px 0}
+  .ok{background:#EAFaf3;color:#0f7a4d;border-radius:10px;padding:12px 14px;font-size:13px;margin:12px 0}
+  a{color:#5B8DEF}
+  .muted{color:#7A889E;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🆓 免费 API 清单（悦读绘本 App）</h1>
+  <div class="sub">按四项核心能力分类 ｜ 免费额度以 2026 年 10 月各官网公布为准，注册前请再核对一次</div>
+
+  <div class="ok"><b>最优 MVP 组合（零/极低成本）：</b>
+    领读→端侧 TTS（iOS/Android 自带，免费）或 Azure TTS F0；
+    拍照 OCR→<b>Google ML Kit（端侧，完全免费无密钥）</b>；
+    跟读评分→<b>Azure 发音评测 F0（每月 5 音频小时免费）</b>，中文补讯飞；
+    公版资源→<b>Project Gutenberg（完全免费）</b>，受版权绘本走用户拍照录入。</div>
+
+  <!-- 1 发音评分 -->
+  <h2>1. 跟读评分 / 纠错（最难免费）</h2>
+  <div class="card">
+    <table>
+      <tr><th>服务</th><th>免费额度</th><th>英文质量</th><th>适合</th></tr>
+      <tr><td><b>Azure AI Speech · Pronunciation Assessment</b></td><td><span class="best">F0 每月 5 音频小时</span>（长期有效，不过期）</td><td>★★★★★ 英文最佳</td><td>生产首选，按音频小时计费，需后端代理密钥</td></tr>
+      <tr><td><b>讯飞 语音评测 (iFlytek ISE)</b></td><td>免费试用最长 3 个月；历史活动送 $3000 调用额</td><td>★★★★ 英+中，儿童打分机制</td><td>中英混合、母语级纠错；需实名</td></tr>
+      <tr><td>SpeechSuper / Speechace</td><td>仅试用，无持续免费档</td><td>★★★★</td><td>教育 SaaS，按量付费</td></tr>
+      <tr><td>开源：wav2vec2 / HuBERT + GOP（Kaldi）</td><td>模型免费，自托管</td><td>★★★ 需自己校准</td><td>有 ML 团队可自建，否则不建议</td></tr>
+    </table>
+    <p class="muted">结论：<b>没有“完全免费且能上生产”的发音评测 API</b>。最划算的是 Azure F0（每月 5 小时音频，长期免费），英文评分准、返回逐词/音素分；中文或母语纠音补讯飞。</p>
+  </div>
+
+  <!-- 2 OCR -->
+  <h2>2. 拍照录入 OCR</h2>
+  <div class="card">
+    <table>
+      <tr><th>服务</th><th>免费额度</th><th>要不要密钥/联网</th><th>适合</th></tr>
+      <tr><td><b>Google ML Kit Text Recognition</b></td><td><span class="best">端侧完全免费</span></td><td>❌ 无需密钥、可离线</td><td><b>MVP 首选</b>，手机本地识别，零成本零合规风险</td></tr>
+      <tr><td><b>OCR.space</b></td><td>25,000 次/月（无需信用卡，免费档允许商用）</td><td>✅ 需 API Key</td><td>快速原型；限制 1MB/3页PDF、带水印</td></tr>
+      <tr><td>Tesseract（开源）</td><td>自托管完全免费，100+ 语言</td><td>❌ 自部署</td><td>可控环境，需工程打磨</td></tr>
+      <tr><td>Google Cloud Vision</td><td>1,000 单位/月</td><td>✅ 需账单</td><td>精度高（98-99%）</td></tr>
+      <tr><td>Azure Document Intelligence</td><td>F0：500 页/月</td><td>✅ 需订阅</td><td>结构化文档</td></tr>
+      <tr><td>Cloudflare Workers AI</td><td>10,000 Neurons/天（免费）</td><td>✅ 在 Worker 内</td><td>已在 CF 上部署时顺手用</td></tr>
+      <tr><td>百度 OCR</td><td>有免费配额（国内友好）</td><td>✅ 需 Key</td><td>国内访问稳定</td></tr>
+    </table>
+    <p class="muted">结论：拍照录入优先 <b>ML Kit 端侧</b>——不要钱、不要密钥、离线可用，完美契合 MVP 控成本。需要更高精度或版面分析再上云端 OCR。</p>
+  </div>
+
+  <!-- 3 TTS -->
+  <h2>3. 领读 TTS（朗读示范）</h2>
+  <div class="card">
+    <table>
+      <tr><th>服务</th><th>免费额度</th><th>备注</th></tr>
+      <tr><td><b>端侧 TTS</b>（iOS AVSpeechSynthesizer / Android TextToSpeech）</td><td><span class="best">完全免费、离线</span></td><td>原型已用浏览器原生 SpeechSynthesis；原生端同样的免费思路</td></tr>
+      <tr><td><b>Azure TTS F0</b></td><td>500,000 神经字符/月（长期，可商用）</td><td>en-US-JennyNeural 等适合儿童，音质优秀</td></tr>
+      <tr><td>Google Cloud TTS</td><td>100 万标准字符/月，约 50 万 WaveNet</td><td>需账单；WaveNet 音质好</td></tr>
+      <tr><td>Amazon Polly</td><td>12 个月免费：500 万标准字符/月</td><td>AWS 生态</td></tr>
+      <tr><td>Edge TTS（edge-tts 第三方）</td><td>免费，无需密钥</td><td>同 Azure 神经音色，可导出音频</td></tr>
+      <tr><td>TTSMaker</td><td>约 2 万字符/周，无需账号</td><td>快速拿 MP3</td></tr>
+    </table>
+    <p class="muted">结论：领读用<b>端侧 TTS 即可零成本</b>；若想统一云端音色/预生成音频，用 Azure TTS F0（每月 50 万字符够读几十本绘本）。</p>
+  </div>
+
+  <!-- 4 资源 -->
+  <h2>4. 公版绘本资源（文字内容）</h2>
+  <div class="card">
+    <table>
+      <tr><th>来源</th><th>免费情况</th><th>说明</th></tr>
+      <tr><td><b>Project Gutenberg</b></td><td><span class="best">完全免费、公版</span></td><td>79,000+ 本，txt/epub/html 直链，有目录可抓取；多为经典文学/儿歌，含少量带图旧绘本</td></tr>
+      <tr><td>Internet Archive</td><td>免费</td><td>大量公版扫描绘本（含插图），可做图文</td></tr>
+      <tr><td>free-books-children API（rallylive / zero.xyz）</td><td>$0.01/次（极便宜，非免费）</td><td>聚合 Gutenberg+IA 的儿童书目录，带 epub/txt/html 下载链接，按主题筛选</td></tr>
+      <tr><td>Standard Ebooks / LibriVox / Open Library</td><td>免费</td><td>精排公版书 / 真人朗读音频 / 元数据</td></tr>
+    </table>
+    <div class="warn"><b>版权红线（务必注意）：</b>你提到的<b>牛津阅读树、红火箭、神奇校车均受版权保护</b>，不能抓取分发。免费公版只能是 older classics（如《鹅妈妈》《彼得兔》美版公版、传统童话）。<b>现代受版权绘本的正确合规路径 = 你已规划的「用户拍照录入自己的书」。</b></div>
+  </div>
+
+  <h2>5. 落地建议（按优先级）</h2>
+  <div class="card">
+    <p><b>第 1 步（0 成本跑通 MVP）：</b>领读 = 端侧 TTS；OCR = ML Kit 端侧；评分 = Azure 发音评测 F0（注册即用，5 小时/月免费）；资源 = Project Gutenberg 公版经典。</p>
+    <p><b>第 2 步（提升质量）：</b>评分补讯飞做中英混合；TTS 换 Azure 神经音色统一质感；OCR 在弱光/复杂版面时回退云端 OCR.space 或腾讯云。</p>
+    <p><b>第 3 步（合规扩量）：</b>受版权分级读物与出版社谈授权，或用「拍照录入」让用户自带书，规避版权。</p>
+    <p class="muted">所有云端密钥（Azure/讯飞/OCR）都必须放<b>后端代理</b>，绝不下发到 App 包，防反编译盗刷。</p>
+  </div>
+
+  <div class="card">
+    <b>下一步我可以帮你做：</b><br/>
+    <span class="tag">Azure 发音评测后端代理代码</span>
+    <span class="tag">ML Kit OCR 接入示例</span>
+    <span class="tag">Gutenberg 资源抓取脚本</span>
+    <span class="tag">把原型评分换成真实 API</span>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,47 @@
+[
+  {
+    "id": 11,
+    "title": "爱丽丝梦游仙境",
+    "titleEn": "Alice's Adventures in Wonderland",
+    "author": "Lewis Carroll",
+    "level": "L4",
+    "url": "https://www.gutenberg.org/files/11/11-0.txt",
+    "intro": "Alice was beginning to get very tired of sitting by her sister."
+  },
+  {
+    "id": 55,
+    "title": "绿野仙踪",
+    "titleEn": "The Wonderful Wizard of Oz",
+    "author": "L. Frank Baum",
+    "level": "L4",
+    "url": "https://www.gutenberg.org/files/55/55-0.txt",
+    "intro": "Dorothy lived in the midst of the great Kansas prairies."
+  },
+  {
+    "id": 14838,
+    "title": "彼得兔的故事",
+    "titleEn": "The Tale of Peter Rabbit",
+    "author": "Beatrix Potter",
+    "level": "L1",
+    "url": "https://www.gutenberg.org/files/14838/14838-0.txt",
+    "intro": "Once upon a time there were four little rabbits."
+  },
+  {
+    "id": 11339,
+    "title": "伊索寓言",
+    "titleEn": "Aesop's Fables",
+    "author": "Aesop",
+    "level": "L3",
+    "url": "https://www.gutenberg.org/files/11339/11339-0.txt",
+    "intro": "The goose that laid the golden eggs."
+  },
+  {
+    "id": 259,
+    "title": "格林童话",
+    "titleEn": "Grimms' Fairy Tales",
+    "author": "Brothers Grimm",
+    "level": "L3",
+    "url": "https://www.gutenberg.org/files/259/259-0.txt",
+    "intro": "Once upon a time there was a miller."
+  }
+]

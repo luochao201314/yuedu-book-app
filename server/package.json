@@ -1,0 +1,13 @@
+{
+  "name": "yuedu-book-backend",
+  "version": "1.0.0",
+  "description": "悦读绘本后端代理：Azure 发音评测 + OCR.space + Gutenberg 公版绘本。零依赖，仅用 Node 内置模块。",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}

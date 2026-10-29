@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 白色书页 -->
+    <path android:fillColor="#FFFFFF" android:pathData="M30,34h48a6,6 0 0 1 6,6v38a6,6 0 0 1 -6,6h-48a6,6 0 0 1 -6,-6v-38a6,6 0 0 1 6,-6z"/>
+    <!-- 书脊 -->
+    <path android:fillColor="#EC6A4E" android:pathData="M54,34v50"/>
+    <!-- 书页线 -->
+    <path android:fillColor="#CBE0F0" android:pathData="M37,46h12v2h-12z"/>
+    <path android:fillColor="#CBE0F0" android:pathData="M37,54h12v2h-12z"/>
+    <path android:fillColor="#CBE0F0" android:pathData="M63,46h12v2h-12z"/>
+    <path android:fillColor="#CBE0F0" android:pathData="M63,54h12v2h-12z"/>
+</vector>

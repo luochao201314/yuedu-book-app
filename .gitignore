@@ -1,0 +1,16 @@
+# Node
+node_modules/
+server/.env
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+
+# OS
+.DS_Store
+
+# 内部记忆/上下文目录（不入库）
+.workbuddy/
