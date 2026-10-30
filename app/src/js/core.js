@@ -360,8 +360,8 @@
       return true;
     },
     async _speakCloud(text, speed, isZh, token) {
-      // 60s 内曾失败则跳过云端，避免反复白等
-      if (this._cloud.ok === false && Date.now() - this._cloud.at < 60000) return false;
+      // 20s 内曾失败则跳过云端，避免反复白等（Render 冷启动常超时，窗口别太长）
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 20000) return false;
       try {
         const base = Api.base();
         if (!base) return false;
@@ -370,7 +370,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: text, lang: lang, rate: Math.round(speed * 100) / 100 }),
-        }, 6000); // 6s 超时即退回原生，不卡界面
+        }, 15000); // 冷启动可能要十几秒；超时再退回原生，不卡界面
         if (token !== this._gen) return false; // 已被新朗读/停止打断，丢弃
         if (!r || r.mock || !r.audio) {
           this._cloud = { ok: false, at: Date.now() };

@@ -55,9 +55,15 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   }
 
-  // 后端健康/密钥状态（不暴露密钥本身）
+  // 后端健康/密钥状态（不暴露密钥本身）；ver 用来确认 Render 是否已部署最新代码
   if (u.pathname === '/api/health') {
-    return send(res, 200, { ok: true, azure: !!process.env.AZURE_SPEECH_KEY, tts: !!process.env.AZURE_SPEECH_KEY, ocr: !!process.env.OCR_SPACE_KEY });
+    return send(res, 200, {
+      ok: true,
+      azure: !!process.env.AZURE_SPEECH_KEY,
+      tts: !!process.env.AZURE_SPEECH_KEY,
+      ocr: !!process.env.OCR_SPACE_KEY,
+      ver: 3
+    });
   }
 
   // 公版绘本书目（Project Gutenberg，无需密钥）
@@ -210,37 +216,67 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const region = process.env.AZURE_SPEECH_REGION || 'eastasia';
-      const endpoint = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
-      const isZh = /^zh/i.test(lang);
-      const voiceName = voice || (isZh ? 'zh-CN-XiaoxiaoNeural' : 'en-US-AriaNeural');
+      // AZURE_TTS_ENDPOINT 仅用于本地 mock 联调，线上不设
+      const endpoint = process.env.AZURE_TTS_ENDPOINT ||
+        `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
+      const safeLang = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/.test(lang) ? lang : 'en-US';
+      const isZh = /^zh/i.test(safeLang);
+      const safeVoice = typeof voice === 'string' && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,16}){2,3}$/.test(voice)
+        ? voice : '';
+      const voiceName = safeVoice || (isZh ? 'zh-CN-XiaoxiaoNeural' : 'en-US-AriaNeural');
       const r2 = Math.max(0.5, Math.min(1.5, typeof rate === 'number' && isFinite(rate) ? rate : 1));
-      const ssml =
-        '<?xml version="1.0" encoding="utf-8"?>\n' +
-        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="' + lang + '">\n' +
-        '  <voice name="' + voiceName + '">\n' +
-        '    <prosody rate="' + r2 + 'x">' + escapeXml(text) + '</prosody>\n' +
-        '  </voice>\n' +
-        '</speak>';
-      const tr = await fetch(endpoint, {
+      // SSML 的 prosody rate 只接受百分比或相对数，"1x" 这种写法会被 Azure 判 400
+      const pct = Math.round((r2 - 1) * 100);
+      const prosody = pct === 0 ? '' : (pct > 0 ? '+' : '') + pct + '%';
+
+      const buildSsml = (withProsody) => {
+        const body = withProsody && prosody
+          ? '<prosody rate="' + prosody + '">' + escapeXml(text) + '</prosody>'
+          : escapeXml(text);
+        return '<?xml version="1.0" encoding="utf-8"?>\n' +
+          '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="' + safeLang + '">\n' +
+          '  <voice name="' + voiceName + '">\n    ' + body + '\n  </voice>\n' +
+          '</speak>';
+      };
+
+      const synth = async (ssml) => fetch(endpoint, {
         method: 'POST',
         headers: {
           'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY,
           'Content-Type': 'application/ssml+xml',
-          'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
+          'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3',
+          // Azure 合成接口要求带 User-Agent，缺了会直接 400
+          'User-Agent': 'yuedu-book/1.0'
         },
         body: ssml
       });
+
+      let tr = await synth(buildSsml(true));
+      let errText = '';
       if (!tr.ok) {
-        const errText = await tr.text();
-        console.error('[tts] azure http', tr.status, errText.slice(0, 300));
-        // 任意异常都降级为 mock，让前端退回设备原生 TTS，避免卡顿
-        return send(res, 200, { mock: true, audio: '', note: '云端朗读失败，已退回设备朗读' });
+        errText = (await tr.text()).slice(0, 300);
+        console.error('[tts] azure http', tr.status, errText);
+        // 第一层兜底：去掉 prosody 再试一次（语速参数最容易被判非法）
+        tr = await synth(buildSsml(false));
+        if (!tr.ok) {
+          errText = (await tr.text()).slice(0, 300);
+          console.error('[tts] azure retry http', tr.status, errText);
+          // 任意异常都降级为 mock，让前端退回设备原生 TTS，避免卡顿
+          return send(res, 200, {
+            mock: true, audio: '',
+            note: '云端朗读失败，已退回设备朗读',
+            upstream: tr.status, detail: errText.slice(0, 160)
+          });
+        }
       }
       const buf = Buffer.from(await tr.arrayBuffer());
-      return send(res, 200, { audio: buf.toString('base64'), format: 'mp3' });
+      if (!buf.length) {
+        return send(res, 200, { mock: true, audio: '', note: '云端朗读返回空音频', upstream: tr.status });
+      }
+      return send(res, 200, { audio: buf.toString('base64'), format: 'mp3', voice: voiceName });
     } catch (e) {
       console.error('[tts] error', e);
-      return send(res, 200, { mock: true, audio: '', note: '云端朗读异常，已退回设备朗读' });
+      return send(res, 200, { mock: true, audio: '', note: '云端朗读异常，已退回设备朗读', detail: String(e).slice(0, 160) });
     }
   }
 

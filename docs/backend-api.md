@@ -77,8 +77,28 @@ POST /api/score   → 502 {"error":"azure failed","msg":"SyntaxError: Unexpected
 
 ### GET /api/health
 ```json
-{ "ok": true, "azure": true, "ocr": true }
+{ "ok": true, "azure": true, "tts": true, "ocr": true, "ver": 3 }
 ```
+`ver` 是代码版本号，用来确认 Render 是否已经部署最新提交（线上 ver 落后就是没重新部署）。
+
+### POST /api/tts （领读语音合成）
+请求：
+```json
+{ "text": "The quick brown fox jumps over the lazy dog.", "lang": "en-US", "rate": 0.9 }
+```
+响应（成功）：
+```json
+{ "audio": "<mp3 的 base64>", "format": "mp3", "voice": "en-US-AriaNeural" }
+```
+响应（失败，App 自动退回手机系统 TTS）：
+```json
+{ "mock": true, "audio": "", "note": "云端朗读失败，已退回设备朗读", "upstream": 400, "detail": "..." }
+```
+> 两个必踩的坑：
+> 1. Azure 合成接口**必须带 `User-Agent`**，缺了直接 400；
+> 2. SSML 的 `prosody rate` 只认百分比（`-38%` / `+40%`）或相对数，写成 `rate="1x"` 会被判非法。
+>    所以服务端先用百分比，失败再**去掉 prosody 重试一次**，两次都失败才降级。
+> 默认音色 `en-US-AriaNeural`（中文 `zh-CN-XiaoxiaoNeural`），可通过 `voice` 字段覆盖。
 
 ### GET /api/books
 ```json
