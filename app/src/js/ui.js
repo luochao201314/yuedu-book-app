@@ -100,6 +100,7 @@
     renderReader();
     APP.go('reader');
     TTS.warm(); // 预热云端朗读路由，降低首次领读的等待
+    TTS.prefetchPraise(); // 提前缓存等级词音频，评完分立刻出声
   }
 
   /* 正文获取优先级：后端代理（无 CORS 限制）→ 原生 httpGet → 直连 */
@@ -249,25 +250,16 @@
       });
   }
 
-  function buildScoreSpeech(res) {
-    if (!res) return '';
-    const low = (res.words || [])
-      .filter((w) => w.score < 72)
-      .map((w) => w.w)
-      .slice(0, 5);
-    let s = '得分 ' + res.score + ' 分。';
-    if (low.length) s += ' 需要多练习的单词有：' + low.join('、') + '。';
-    else s += ' 读得很棒，继续加油！';
-    return s;
-  }
-
   function paintScore(card, res, animate) {
     const pill = $('.score-pill', card);
     const wordsEl = $('.words', card);
     const fixEl = $('.fix', card);
+    const grade = TTS.grade(res.score);
     pill.hidden = false;
     pill.className = 'score-pill' + (res.score >= 85 ? '' : res.score >= 70 ? ' mid' : ' low');
-    pill.textContent = (res.score >= 85 ? '🎉 ' : res.score >= 70 ? '👍 ' : '💪 ') + res.score + ' 分';
+    pill.innerHTML =
+      '<b>' + res.score + ' 分</b>' +
+      '<span class="grade">' + esc(grade) + '</span>';
     if (res.words && res.words.length) {
       wordsEl.hidden = false;
       wordsEl.innerHTML = res.words
@@ -410,14 +402,13 @@
         dur: Math.round(ctx.dur * 10) / 10,
       });
       paintScore(ctx.card, res, true);
-      // 朗读评分结果（中文）
-      const zh = buildScoreSpeech(res);
-      if (zh) TTS.speak(zh, 0.95);
+      // 评分播报：等级词（Great! / Wonderful! …）走本地缓存，命中即出声
+      const grade = TTS.speakPraise(res.score);
       showRecRow(ctx);
       renderReaderFoot();
       updateReaderBar();
       buzz(14);
-      toast('已记录：' + res.score + ' 分');
+      toast(res.score + ' 分 · ' + grade);
     } catch (e) {
       const row = $('.rec-row', ctx.card);
       row.hidden = false;
@@ -540,63 +531,144 @@
     }
   }
 
-  /* ================= 拍照录入 ================= */
+  /* ================= 拍照录入（支持多张合并成一本） ================= */
+  let ocrImgs = [];        // 已选图片 base64
+  let ocrPages = [];       // 每张图识别出的文字（按页）
+  let ocrEdited = false;   // 用户是否手改过文本框
+
   function openOCR() {
+    ocrImgs = [];
+    ocrPages = [];
+    ocrEdited = false;
     const body = $('#sheetBody');
     body.innerHTML =
       '<h3>📷 拍照录入绘本</h3>' +
-      '<div class="desc">拍下绘本页面，自动识别英文文字，生成可跟读的句子。图片只在本机处理，不会保存到云端。</div>' +
-      '<div class="dropzone" id="drop"><b>📷 拍照</b> / 🖼 相册<small>建议正对页面，光线充足，字迹清晰</small></div>' +
-      '<div class="sheet-actions" style="margin-top:-4px;margin-bottom:6px">' +
-      '<button class="btn ghost" id="btnCamera">打开相机</button>' +
-      '<button class="btn ghost" id="btnGallery">从相册选</button>' +
+      '<div class="desc">可以一次拍/选多页，识别后合成同一本绘本，再起个名字。图片只在本机与你的后端之间传输，不会保存。' +
+      '<br><span class="muted">照片里的页码、页眉页脚会自动过滤。</span></div>' +
+      '<div class="sheet-actions" style="margin-bottom:8px">' +
+      '<button class="btn ghost" id="btnCamera">📷 拍一页</button>' +
+      '<button class="btn ghost" id="btnGallery">🖼 相册多选</button>' +
       '</div>' +
-      '<div id="ocrPreview"></div>' +
-      '<label class="field" style="border:none"><span>书名</span><input id="ocrTitle" class="input" placeholder="给我的绘本起个名字" /></label>' +
-      '<textarea id="ocrText" class="ocr-text" placeholder="识别结果会出现在这里，可以手动修改"></textarea>' +
+      '<div class="thumb-grid" id="ocrThumbs"></div>' +
+      '<label class="field" style="border:none"><span>书名</span><input id="ocrTitle" class="input" placeholder="给这本书起个名字" /></label>' +
+      '<textarea id="ocrText" class="ocr-text" placeholder="识别结果会出现在这里，可以手动修改（每行/每句都会被拆成跟读句）"></textarea>' +
+      '<div class="muted" id="ocrState" style="margin:-6px 0 10px"></div>' +
       '<div class="sheet-actions">' +
       '<button class="btn ghost" id="ocrCancel">取消</button>' +
-      '<button class="btn primary" id="ocrSave" disabled>存入我的绘本</button>' +
+      '<button class="btn ghost" id="ocrRun">开始识别</button>' +
+      '<button class="btn primary" id="ocrSave" disabled>存成一本绘本</button>' +
       '</div>';
     $('#sheetMask').classList.add('show');
-    $('#ocrTitle').value = '我的绘本 ' + dayKey().slice(5);
+    $('#ocrTitle').value = defaultMineTitle();
     $('#ocrText').addEventListener('input', () => {
+      ocrEdited = true;
       $('#ocrSave').disabled = !$('#ocrText').value.trim();
     });
     $('#ocrCancel').onclick = closeSheet;
-    const grab = async (mode) => {
-      let b64;
+
+    const drawThumbs = () => {
+      $('#ocrThumbs').innerHTML = ocrImgs
+        .map(
+          (b64, i) =>
+            '<div class="thumb"><img src="data:image/jpeg;base64,' + b64 + '" alt="" />' +
+            '<button class="thumb-x" data-i="' + i + '" aria-label="移除">×</button>' +
+            '<span class="thumb-i">' + (i + 1) + '</span></div>'
+        )
+        .join('');
+      $$('#ocrThumbs .thumb-x').forEach((b) =>
+        b.addEventListener('click', () => {
+          ocrImgs.splice(Number(b.dataset.i), 1);
+          ocrPages = [];
+          drawThumbs();
+          updateOcrState();
+        })
+      );
+      updateOcrState();
+    };
+    const updateOcrState = () => {
+      const n = ocrImgs.length;
+      $('#ocrRun').disabled = !n;
+      $('#ocrRun').textContent = n ? '开始识别（' + n + ' 页）' : '开始识别';
+      if (!n) $('#ocrState').textContent = '还没有图片，先拍一页或从相册多选';
+      else if (!ocrPages.length) $('#ocrState').textContent = '已选 ' + n + ' 页，点『开始识别』';
+      else $('#ocrState').textContent = '已识别 ' + n + ' 页，可修改文字后保存';
+    };
+
+    const addImgs = (arr) => {
+      arr.forEach((b64) => {
+        if (b64 && ocrImgs.length < 8) ocrImgs.push(b64);
+      });
+      ocrPages = [];
+      drawThumbs();
+    };
+
+    $('#btnCamera').onclick = async () => {
       try {
-        b64 = await APP.pickPhoto(mode);
+        const b64 = await APP.pickPhoto('camera');
+        if (b64) addImgs([b64]);
       } catch (e) {
-        return toast(mode === 'camera' ? '打开相机失败' : '打开相册失败');
+        toast('打开相机失败');
       }
-      if (!b64) return;
-      $('#ocrPreview').innerHTML =
-        '<img src="data:image/jpeg;base64,' + b64 + '" style="width:100%;border-radius:14px;margin-bottom:10px;max-height:220px;object-fit:cover" />' +
-        '<div class="muted" id="ocrState">正在识别…</div>';
-      loading(true, '识别文字中…');
+    };
+    $('#btnGallery').onclick = async () => {
       try {
-        const raw = await Api.ocr(b64, 'eng');
-        const text = pickOcrText(raw);
-        $('#ocrText').value = text;
-        $('#ocrSave').disabled = !text.trim();
-        $('#ocrState').textContent = text ? '识别完成，可修改后保存' : '没有识别到文字，可重拍或手动输入';
-        if (!text) toast('未识别到文字，试试更清晰的照片');
+        toast('可一次选多张');
+        const arr = await APP.pickPhotos();
+        if (arr && arr.length) addImgs(arr);
       } catch (e) {
-        $('#ocrState').textContent = '';
-        toast('识别失败：' + (e.message || '服务异常'));
+        toast('打开相册失败');
+      }
+    };
+
+    $('#ocrRun').onclick = async () => {
+      if (!ocrImgs.length) return;
+      loading(true, '识别文字中…');
+      const texts = [];
+      try {
+        for (let i = 0; i < ocrImgs.length; i++) {
+          $('#ocrState').textContent = '正在识别第 ' + (i + 1) + '/' + ocrImgs.length + ' 页…';
+          try {
+            const raw = await Api.ocr(ocrImgs[i], 'eng');
+            texts.push(pickOcrText(raw));
+          } catch (e) {
+            texts.push('');
+          }
+        }
+        ocrPages = texts.map((t) => cleanOcrText(t));
+        // 多页去重页眉页脚（同一行在多页重复出现）
+        if (ocrPages.length > 1) ocrPages = dedupeRunningLines(ocrPages);
+        const merged = ocrPages.filter((t) => t.trim()).join('\n\n');
+        if (!ocrEdited || !$('#ocrText').value.trim()) $('#ocrText').value = merged;
+        $('#ocrSave').disabled = !$('#ocrText').value.trim();
+        const hit = ocrPages.filter((t) => t.trim()).length;
+        $('#ocrState').textContent = hit
+          ? '识别完成：' + hit + '/' + ocrPages.length + ' 页有文字，可修改后保存'
+          : '没有识别到英文，试试更清晰的照片或手动输入';
+        if (!hit) toast('未识别到文字，试试更清晰的照片');
       } finally {
         loading(false);
       }
     };
-    $('#drop').onclick = () => grab('camera');
-    $('#btnCamera').onclick = () => grab('camera');
-    $('#btnGallery').onclick = () => grab('gallery');
+
     $('#ocrSave').onclick = () => {
       const text = $('#ocrText').value.trim();
-      const sentences = splitSentences(text);
-      if (!sentences.length) return toast('至少需要一句完整的英文');
+      if (!text) return toast('还没有文字');
+      // 没改过就用分页结构；改过就整体重新分句
+      let pages;
+      if (ocrEdited || ocrPages.filter((t) => t.trim()).length < 2) {
+        const sentences = splitSentences(text);
+        if (!sentences.length) return toast('至少需要一句完整的英文');
+        pages = [{ sentences: sentences.map((en) => ({ en: en, zh: '' })) }];
+      } else {
+        pages = ocrPages
+          .map((t) => ({ sentences: splitSentences(t).map((en) => ({ en: en, zh: '' })) }))
+          .filter((p) => p.sentences.length);
+        if (!pages.length) {
+          const sentences = splitSentences(text);
+          if (!sentences.length) return toast('至少需要一句完整的英文');
+          pages = [{ sentences: sentences.map((en) => ({ en: en, zh: '' })) }];
+        }
+      }
       const book = {
         id: 'mine-' + Date.now(),
         title: ($('#ocrTitle').value || '我的绘本').trim(),
@@ -606,14 +678,131 @@
         source: 'mine',
         color: '#7C8FB5',
         emoji: '📷',
-        pages: [{ sentences: sentences.map((en) => ({ en: en, zh: '' })) }],
+        pages: pages,
       };
       Store.addMine(book);
       closeSheet();
-      toast('已存入我的绘本');
+      toast('已存成《' + book.title + '》，共 ' + pages.reduce((a, p) => a + p.sentences.length, 0) + ' 句');
       APP.go('library');
       renderLibrary();
     };
+
+    drawThumbs();
+  }
+
+  function defaultMineTitle() {
+    const n = Store.mine().length + 1;
+    return '我的绘本 ' + n;
+  }
+
+  /* 清理 OCR 噪点：页码、页眉页脚、符号乱码、断词连字符 */
+  function cleanOcrText(text) {
+    if (!text) return '';
+    let s = String(text)
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ')
+      // 连字符断词：exam-\nple → example
+      .replace(/([A-Za-z])-\s*\n\s*([a-z])/g, '$1$2')
+      // 常见 OCR 误识别
+      .replace(/\uFB01/g, 'fi').replace(/\uFB02/g, 'fl')
+      .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+      .replace(/\u2013|\u2014/g, '-')
+      .replace(/[|¦]/g, ' ')
+      .replace(/[•·●○◆◇★☆]/g, ' ')
+      .replace(/[ \t]{2,}/g, ' ');
+
+    const lines = s.split('\n').map((l) => l.replace(/^[ \t]+|[ \t]+$/g, ''));
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line) { out.push(''); continue; }
+      if (isPageNumberLine(line)) continue;
+      if (isHeaderLine(line)) continue;
+      if (isGarbageLine(line)) continue;
+      out.push(line);
+    }
+    let res = out.join('\n').replace(/\n{3,}/g, '\n\n');
+    // 行内多余空格清理：标点前空格、单词间多空格
+    res = res.replace(/[ \t]+([,.;:!?])/g, '$1').replace(/[ \t]{2,}/g, ' ');
+    return res.trim();
+  }
+
+  function isPageNumberLine(line) {
+    const t = line.trim();
+    if (!t || t.length > 32) return false;
+    // 纯数字：12 / - 12 - / 12 of 30 / 12/30
+    if (/^[-–—\s]*\d{1,4}[-–—\s]*$/.test(t)) return true;
+    if (/^\d{1,4}\s*(\/|of)\s*\d{1,4}$/i.test(t)) return true;
+    // Page 12 / p.12 / PAGE TWELVE
+    if (/^(page|p|pg)\.?\s*\d{1,4}$/i.test(t)) return true;
+    // 罗马数字页码
+    if (/^(?=[ivxlcdm]+$)i{1,3}|iv|vi{0,3}|ix|xi{0,3}$/i.test(t)) return true;
+    // 汉字/中文页码
+    if (/^第?\s*\d{1,4}\s*页$/.test(t)) return true;
+    return false;
+  }
+
+  /** 全大写短行（如 BROWN BEAR / THE LITTLE RED HEN）多是页眉标题，跟读句里没有意义 */
+  function isHeaderLine(line) {
+    const t = line.trim();
+    if (!t || t.length > 40) return false;
+    if (/[.!?,;:"]/.test(t)) return false;
+    if (/[a-z]/.test(t)) return false;
+    const letters = (t.match(/[A-Z]/g) || []).length;
+    const words = t.split(/\s+/).filter((w) => /[A-Z]/.test(w)).length;
+    return letters >= 4 && words >= 2;
+  }
+
+  function isGarbageLine(line) {
+    const t = line.trim();
+    if (!t) return true;
+    const letters = (t.match(/[A-Za-z]/g) || []).length;
+    const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+    const digits = (t.match(/\d/g) || []).length;
+    const printable = (t.match(/[A-Za-z0-9\u4e00-\u9fff\s,.;:!?'"()\[\]\-]/g) || []).length;
+    const ratio = printable / t.length;
+    // 一行里几乎没有字母/汉字，且充满符号 → 丢掉
+    if (letters + cjk === 0) return true;
+    if (letters + cjk < 3 && digits > 0) return true;
+    if (ratio < 0.6) return true;
+    return false;
+  }
+
+  /** 多页时删除重复出现的页眉/页脚：只看每页第一行和最后一行，避免误删重复的正文句 */
+  function dedupeRunningLines(pages) {
+    const norm = (l) => l.trim().replace(/\d+/g, '#').toLowerCase();
+    const linesOf = (p) =>
+      String(p || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+    const count = {};
+    pages.forEach((p) => {
+      const ls = linesOf(p);
+      if (!ls.length) return;
+      const seen = new Set();
+      [ls[0], ls[ls.length - 1]].forEach((l) => {
+        const k = norm(l);
+        if (k.length > 48 || seen.has(k)) return;
+        seen.add(k);
+        count[k] = (count[k] || 0) + 1;
+      });
+    });
+    const limit = Math.max(2, Math.ceil(pages.length * 0.5));
+    const drop = Object.keys(count).filter((k) => count[k] >= limit);
+    if (!drop.length) return pages;
+    const dropSet = new Set(drop);
+    return pages.map((p) => {
+      const ls = linesOf(p);
+      if (ls.length < 2) return String(p || '').trim();
+      const head = ls[0];
+      const tail = ls[ls.length - 1];
+      const body = ls.slice(1, ls.length - 1).filter((l) => !dropSet.has(norm(l)));
+      const keepHead = dropSet.has(norm(head)) ? [] : [head];
+      const keepTail = dropSet.has(norm(tail)) ? [] : [tail];
+      return keepHead.concat(body, keepTail).join('\n');
+    });
   }
 
   function pickOcrText(raw) {
@@ -626,19 +815,220 @@
     return '';
   }
 
-  function splitSentences(text) {
-    return String(text)
-      .replace(/\r/g, ' ')
-      .replace(/\s*\n+\s*/g, ' ')
+  /** 按行 + 标点分句：行尾没标点且下一行是小写开头 → 视为同一句（OCR 换行断句） */
+  function splitSentences(text, limit) {
+    const lines = String(text)
+      .replace(/\r/g, '\n')
       .replace(/[“”]/g, '"')
-      .split(/(?<=[.!?])\s+/)
-      .map((s) => s.trim().replace(/^["']+|["']+$/g, ''))
-      .filter((s) => s.length > 3 && /[A-Za-z]{2}/.test(s))
-      .slice(0, 40);
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const blocks = [];
+    let cur = '';
+    lines.forEach((line) => {
+      if (!cur) {
+        cur = line;
+        return;
+      }
+      const prevOpen = !/[.!?:;"]$/.test(cur);
+      const nextLower = /^[a-z]/.test(line);
+      if (prevOpen && nextLower) cur += ' ' + line;
+      else {
+        blocks.push(cur);
+        cur = line;
+      }
+    });
+    if (cur) blocks.push(cur);
+
+    const out = [];
+    blocks.forEach((b) => {
+      String(b)
+        .split(/(?<=[.!?])\s+(?=["']?[A-Z0-9])/)
+        .forEach((s) => {
+          const t = s.trim().replace(/^["']+|["']+$/g, '').replace(/\s{2,}/g, ' ');
+          if (t.length > 3 && /[A-Za-z]{2}/.test(t)) out.push(t);
+        });
+    });
+    return out.slice(0, limit || 40);
   }
 
   function closeSheet() {
     $('#sheetMask').classList.remove('show');
+  }
+
+  /* ================= 导入本地书籍（txt / md / html / epub / pdf） ================= */
+  let importPages = null; // PDF 逐页识别结果（供分页保存）
+
+  function openImport() {
+    importPages = null;
+    const body = $('#sheetBody');
+    body.innerHTML =
+      '<h3>📥 导入本地书籍</h3>' +
+      '<div class="desc">支持 txt / md / html / epub / pdf。' +
+      '<br><span class="muted">epub 自动抽取正文；pdf 逐页转图片再识别（最多 20 页）。导入后和拍照录入一样能跟读评分。</span></div>' +
+      '<div class="sheet-actions" style="margin-bottom:8px">' +
+      '<button class="btn ghost" id="importPick">📂 选择文件</button>' +
+      '</div>' +
+      '<div class="muted" id="importState" style="margin:-2px 0 10px">还没有选择文件</div>' +
+      '<label class="field" style="border:none"><span>书名</span><input id="importTitle" class="input" placeholder="默认用文件名" /></label>' +
+      '<textarea id="importText" class="ocr-text" placeholder="导入的文字会出现在这里，可以修改后再保存"></textarea>' +
+      '<div class="sheet-actions">' +
+      '<button class="btn ghost" id="importCancel">取消</button>' +
+      '<button class="btn primary" id="importSave" disabled>存成一本绘本</button>' +
+      '</div>';
+    $('#sheetMask').classList.add('show');
+    $('#importCancel').onclick = closeSheet;
+    const setText = (t) => {
+      $('#importText').value = t || '';
+      $('#importSave').disabled = !(t || '').trim();
+    };
+    $('#importText').addEventListener('input', () => {
+      importPages = null; // 手动改过就整体重新分句
+      $('#importText').dataset.edited = '1';
+      $('#importSave').disabled = !$('#importText').value.trim();
+    });
+    $('#importSave').onclick = () => saveImport();
+
+    const run = async () => {
+      let file;
+      try {
+        file = await APP.pickBookFile();
+      } catch (e) {
+        return toast('打开文件失败');
+      }
+      if (!file) return;
+      if (file.error) return toast(file.error);
+      const name = file.name || '未命名';
+      $('#importTitle').value = titleFromFile(name);
+
+      if (file.kind === 'pdf') {
+        const pages = Array.isArray(file.pages) ? file.pages : [];
+        if (!pages.length) return toast('这个 PDF 打不开或没有页面');
+        const texts = [];
+        loading(true, '转换 PDF 第 1 页…');
+        try {
+          for (let i = 0; i < pages.length; i++) {
+            $('#importState').textContent = '正在识别 PDF 第 ' + (i + 1) + '/' + pages.length + ' 页…';
+            loading(true, '识别 PDF 第 ' + (i + 1) + '/' + pages.length + ' 页…');
+            try {
+              const raw = await Api.ocr(pages[i], 'eng');
+              texts.push(cleanOcrText(pickOcrText(raw)));
+            } catch (e) {
+              texts.push('');
+            }
+          }
+        } finally {
+          loading(false);
+        }
+        const deduped = dedupeRunningLines(texts);
+        importPages = deduped.map((t) => splitSentences(t)).filter((arr) => arr.length);
+        const merged = deduped.filter((t) => t.trim()).join('\n\n');
+        setText(merged);
+        const hit = deduped.filter((t) => t.trim()).length;
+        $('#importState').textContent = hit
+          ? 'PDF 共 ' + (file.total || pages.length) + ' 页，已识别 ' + hit + ' 页，可修改后保存'
+          : 'PDF 没有识别出英文，扫描版太模糊的话换一本试试';
+        if (!hit) toast('PDF 未识别到文字');
+        return;
+      }
+
+      let text = String(file.text || '');
+      if (/\.(html?|xhtml)$/i.test(name)) text = htmlToText(text);
+      else text = String(text).replace(/\r\n?/g, '\n');
+      text = cleanImportText(text);
+      setText(text);
+      const n = splitSentences(text, 4000).length;
+      $('#importState').textContent = n
+        ? '已读取《' + titleFromFile(name) + '》，约 ' + n + ' 句，可修改后保存'
+        : '这个文件里没找到英文句子';
+      if (!n) toast('文件里没有英文句子');
+    };
+
+    $('#importPick').onclick = run;
+  }
+
+  function titleFromFile(name) {
+    const base = String(name || '').replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').trim();
+    return base || defaultMineTitle();
+  }
+
+  /** 导入文本清理：去 BOM、压缩空行、去掉纯噪声行（保留原有分段） */
+  function cleanImportText(text) {
+    let s = String(text || '')
+      .replace(/^\uFEFF/, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\uFFFD/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{4,}/g, '\n\n\n')
+      .replace(/[ \t]{2,}/g, ' ');
+    const lines = s.split('\n');
+    const out = [];
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) {
+        out.push('');
+        continue;
+      }
+      if (isPageNumberLine(t)) continue;
+      out.push(t);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  function htmlToText(html) {
+    return String(html || '')
+      .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|h[1-6]|li|tr|section|article|blockquote)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&#x?[0-9a-f]+;/gi, ' ');
+  }
+
+  function saveImport() {
+    const text = $('#importText').value.trim();
+    if (!text) return toast('还没有文字');
+    const usePaged = importPages && importPages.length && !$('#importText').dataset.edited;
+    let pages;
+    if (usePaged) {
+      pages = importPages.slice(0, 24).map((arr) => ({
+        sentences: arr.map((en) => ({ en: en, zh: '' })),
+      }));
+    } else {
+      const sentences = splitSentences(text, 240);
+      if (!sentences.length) return toast('至少需要一句完整的英文');
+      pages = [];
+      for (let i = 0; i < sentences.length; i += 12) {
+        pages.push({
+          sentences: sentences.slice(i, i + 12).map((en) => ({ en: en, zh: '' })),
+        });
+      }
+    }
+    if (!pages.length) return toast('至少需要一句完整的英文');
+    const title = ($('#importTitle').value || '').trim() || defaultMineTitle();
+    const book = {
+      id: 'mine-' + Date.now(),
+      title: title,
+      titleEn: '',
+      series: '导入书籍',
+      level: '导入',
+      source: 'mine',
+      color: '#8FA88C',
+      emoji: '📥',
+      pages: pages,
+    };
+    Store.addMine(book);
+    closeSheet();
+    const total = pages.reduce((a, p) => a + p.sentences.length, 0);
+    toast('已导入《' + title + '》，共 ' + total + ' 句');
+    APP.go('library');
+    renderLibrary();
   }
 
   /* ================= 同步公版 ================= */
@@ -689,9 +1079,20 @@
     renderGrowth: renderGrowth,
     renderMe: renderMe,
     openOCR: openOCR,
+    openImport: openImport,
     closeSheet: closeSheet,
     syncPublic: syncPublic,
     testApi: testApi,
     stopFollow: stopFollow,
+    // 供本地调试/自动化校验的纯函数（无副作用）
+    _ocr: {
+      clean: cleanOcrText,
+      dedupe: dedupeRunningLines,
+      pageNum: isPageNumberLine,
+      garbage: isGarbageLine,
+      split: splitSentences,
+      html: htmlToText,
+      importClean: cleanImportText,
+    },
   };
 })();

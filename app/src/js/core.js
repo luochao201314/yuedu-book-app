@@ -323,6 +323,8 @@
     },
     onPermission: null,
     onPhoto: null,
+    onPhotos: null,
+    onBookFile: null,
     onError: null,
     onAutoStop: null,
   };
@@ -332,6 +334,16 @@
     },
     onPhoto(b64) {
       if (Native.onPhoto) Native.onPhoto(b64);
+    },
+    onPhotos(json) {
+      let arr = [];
+      try { arr = JSON.parse(String(json || '[]')); } catch (e) { arr = []; }
+      if (Native.onPhotos) Native.onPhotos(Array.isArray(arr) ? arr : []);
+    },
+    onBookFile(json) {
+      let obj = null;
+      try { obj = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { obj = null; }
+      if (Native.onBookFile) Native.onBookFile(obj);
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
@@ -446,6 +458,91 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Hello.', lang: 'en-US', rate: 1 }),
       }).catch(() => {});
+    },
+
+    /* ---- 评分等级词：预取短音频，评完立刻播，不用等网络 ---- */
+    _praise: null,   // word -> base64 mp3
+    _praiseBusy: false,
+    grade(score) {
+      const s = Number(score) || 0;
+      if (s >= 95) return 'Excellent!';
+      if (s >= 90) return 'Wonderful!';
+      if (s >= 85) return 'Great!';
+      if (s >= 78) return 'Good job!';
+      if (s >= 70) return 'Nice try!';
+      return 'Keep going!';
+    },
+    _praiseKey: 'yd_praise_v1',
+    _loadPraise() {
+      if (this._praise) return this._praise;
+      this._praise = {};
+      try {
+        const raw = Store.getRaw ? Store.getRaw(this._praiseKey) : localStorage.getItem(this._praiseKey);
+        if (raw) this._praise = JSON.parse(raw) || {};
+      } catch (e) {
+        this._praise = {};
+      }
+      return this._praise;
+    },
+    prefetchPraise() {
+      if (this._praiseBusy) return;
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 20000) return;
+      if (!Api.base()) return;
+      const words = ['Excellent!', 'Wonderful!', 'Great!', 'Good job!', 'Nice try!', 'Keep going!'];
+      const cache = this._loadPraise();
+      const todo = words.filter((w) => !cache[w]);
+      if (!todo.length) return;
+      this._praiseBusy = true;
+      const self = this;
+      (async () => {
+        let changed = false;
+        for (const w of todo) {
+          try {
+            const r = await Api.req('/api/tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: w, lang: 'en-US', rate: 0.95 }),
+            }, 15000);
+            if (r && r.audio) {
+              self._loadPraise()[w] = r.audio;
+              changed = true;
+              // 每拿一条就落盘，评到一半也能立刻出声
+              try {
+                const json = JSON.stringify(self._loadPraise());
+                if (json.length < 400000) {
+                  if (Store.setRaw) Store.setRaw(self._praiseKey, json);
+                  else localStorage.setItem(self._praiseKey, json);
+                }
+              } catch (e) {}
+            } else if (r && r.mock) {
+              break; // 云端不可用，别再逐个试
+            }
+          } catch (e) {
+            break;
+          }
+        }
+        self._praiseBusy = false;
+      })();
+    },
+    /** 评分播报：有缓存就立刻放；没缓存先用系统 TTS 秒回，同时后台补缓存 */
+    speakPraise(score) {
+      const word = this.grade(score);
+      const cache = this._loadPraise();
+      const b64 = cache[word];
+      if (b64) {
+        this._stopAudio();
+        try {
+          const el = new Audio('data:audio/mpeg;base64,' + b64);
+          this._audio = el;
+          el.play().catch(() => this._native(word, 1, {}, false));
+        } catch (e) {
+          this._native(word, 1, {}, false);
+        }
+        return word;
+      }
+      this._native(word, 1, {}, false);
+      this.prefetchPraise();
+      return word;
     },
   };
 
@@ -629,6 +726,88 @@
     });
   }
 
+  /* ---------------- 多选图片（批量录入） ---------------- */
+  function pickPhotos() {
+    return new Promise((resolve, reject) => {
+      if (Native.available()) {
+        Native.onPhotos = (arr) => resolve(Array.isArray(arr) ? arr : []);
+        try {
+          Android.pickImages();
+        } catch (e) {
+          reject(e);
+        }
+        return;
+      }
+      const input = $('#filePick');
+      input.value = '';
+      input.removeAttribute('capture');
+      input.setAttribute('multiple', 'multiple');
+      input.onchange = async () => {
+        const files = Array.from(input.files || []).slice(0, 8);
+        input.removeAttribute('multiple');
+        if (!files.length) return resolve([]);
+        try {
+          const out = [];
+          for (const f of files) out.push(await fileToB64(f, 1280));
+          resolve(out);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      input.click();
+    });
+  }
+
+  function fileToB64(file, max) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, (max || 1400) / Math.max(img.width, img.height));
+        const cv = document.createElement('canvas');
+        cv.width = Math.round(img.width * scale);
+        cv.height = Math.round(img.height * scale);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        resolve(cv.toDataURL('image/jpeg', 0.82).split(',')[1]);
+      };
+      img.onerror = () => reject(new Error('图片读取失败'));
+      img.src = url;
+    });
+  }
+
+  /* ---------------- 导入本地书籍（txt / md / html / epub / pdf） ---------------- */
+  function pickBookFile() {
+    return new Promise((resolve, reject) => {
+      if (Native.available()) {
+        Native.onBookFile = (obj) => resolve(obj || null);
+        try {
+          Android.pickBookFile();
+        } catch (e) {
+          reject(e);
+        }
+        return;
+      }
+      const input = $('#filePick');
+      input.value = '';
+      input.removeAttribute('capture');
+      input.removeAttribute('multiple');
+      input.accept = '.txt,.md,.markdown,.html,.htm,.epub,.pdf,text/plain';
+      input.onchange = async () => {
+        const f = input.files && input.files[0];
+        input.accept = 'image/*';
+        if (!f) return resolve(null);
+        const lower = f.name.toLowerCase();
+        if (/\.(txt|md|markdown|html?)$/.test(lower)) {
+          resolve({ kind: 'text', name: f.name, text: await f.text() });
+        } else {
+          resolve({ error: '浏览器预览版只支持 txt / md / html；epub、pdf 请用 APK' });
+        }
+      };
+      input.click();
+    });
+  }
+
   /* ---------------- 统计 ---------------- */
   function stats() {
     const ss = Store.sessions();
@@ -733,6 +912,9 @@
   APP.TTS = TTS;
   APP.Rec = Rec;
   APP.pickPhoto = pickPhoto;
+  APP.pickPhotos = pickPhotos;
+  APP.pickBookFile = pickBookFile;
+  APP.fileToB64 = fileToB64;
   APP.normalizeScore = normalizeScore;
   APP.books = { all: allBooks, byId: bookById, sentenceAt: sentenceAt, count: sentenceCount, progress: bookProgress };
   APP.stats = stats;

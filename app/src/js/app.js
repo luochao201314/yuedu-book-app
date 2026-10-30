@@ -71,6 +71,7 @@
 
   /* ---------- 绘本库动作 ---------- */
   $('#ocrBtn').addEventListener('click', () => APP.ui.openOCR());
+  $('#importBtn').addEventListener('click', () => APP.ui.openImport());
   $('#syncBtn').addEventListener('click', () => APP.ui.syncPublic());
 
   /* ---------- 录音条 ---------- */

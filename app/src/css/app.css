@@ -108,13 +108,21 @@ input{font-family:inherit}
 .dot-own{width:6px;height:6px;border-radius:50%;background:var(--brand);display:inline-block}
 
 .empty{color:var(--sub);font-size:13px;text-align:center;padding:30px 0}
-.float-actions{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + var(--safe-b));width:100%;max-width:480px;padding:0 16px;display:flex;justify-content:flex-end;pointer-events:none;z-index:15}
+.float-actions{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + var(--safe-b));width:100%;max-width:480px;padding:0 16px;display:flex;justify-content:flex-end;gap:8px;pointer-events:none;z-index:15}
 .fab{
   pointer-events:auto;background:var(--brand);color:#fff;font-weight:800;font-size:14px;
   padding:13px 18px;border-radius:999px;box-shadow:0 10px 24px rgba(255,122,89,.42);
   display:flex;align-items:center;gap:7px;
 }
 .fab:active{transform:scale(.95)}
+.fab.ghost{background:#fff;color:var(--ink);box-shadow:0 8px 20px rgba(28,42,66,.16)}
+
+/* 批量识别缩略图 */
+.thumb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.thumb{position:relative;padding-top:100%;border-radius:12px;overflow:hidden;background:#EEF2F8;border:1px solid var(--line)}
+.thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.thumb-x{position:absolute;top:2px;right:2px;width:22px;height:22px;border-radius:50%;background:rgba(18,26,40,.62);color:#fff;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center}
+.thumb-i{position:absolute;left:4px;bottom:4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:rgba(18,26,40,.62);color:#fff;font-size:10.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
 
 /* ---------- 阅读页 ---------- */
 .reader-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -153,6 +161,8 @@ input{font-family:inherit}
 }
 .score-pill.low{background:var(--bad-soft);color:var(--bad)}
 .score-pill.mid{background:var(--warn-soft);color:var(--warn)}
+.score-pill b{font-size:15px}
+.score-pill .grade{font-size:12.5px;opacity:.9;padding-left:6px;border-left:1px solid currentColor;border-left-color:rgba(0,0,0,.12)}
 .words{margin-top:10px;font-size:17px;line-height:1.75;font-weight:600;letter-spacing:.2px}
 .w{border-radius:5px;padding:0 1px}
 .w.good{color:var(--good)}
