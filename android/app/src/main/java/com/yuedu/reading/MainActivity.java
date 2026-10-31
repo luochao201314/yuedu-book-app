@@ -593,14 +593,16 @@ public class MainActivity extends Activity {
         js("window.Native.onBookFile(" + sb + ")");
     }
 
+    /* 一张一张回传，避免单次 evaluateJavascript 字符串过大（8 页 base64 有好几 MB） */
     private void sendPhotos(List<String> list) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < list.size(); i++) {
-            if (i > 0) sb.append(',');
-            sb.append('"').append(list.get(i)).append('"');
+        if (list == null || list.isEmpty()) {
+            js("window.Native.onPhotos('[]')");
+            return;
         }
-        sb.append(']');
-        js("window.Native.onPhotos('" + sb + "')");
+        for (int i = 0; i < list.size(); i++) {
+            String json = "{\"i\":" + i + ",\"n\":" + list.size() + ",\"b\":\"" + list.get(i) + "\"}";
+            js("window.Native.onPhotoItem('" + json + "')");
+        }
     }
 
     private Bitmap decode(Uri uri, int max) throws Exception {
@@ -624,6 +626,13 @@ public class MainActivity extends Activity {
 
     /* ------------------------- 返回键 ------------------------- */
     private boolean handledBack = false;
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从后台切回前台：叫前端唤醒后端（Render 免费实例会休眠）
+        if (web != null) js("window.Native&&window.Native.onResume&&window.Native.onResume()");
+    }
 
     @Override
     public void onBackPressed() {

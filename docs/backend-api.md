@@ -81,6 +81,8 @@ POST /api/score   → 502 {"error":"azure failed","msg":"SyntaxError: Unexpected
 ```
 `ver` 是代码版本号，用来确认 Render 是否已经部署最新提交（线上 ver 落后就是没重新部署）。
 
+App 把这个接口当作「叫醒」探针：启动、从后台切回前台（原生 `onResume` / `visibilitychange`）、前台每 8 分钟各打一次。Render 免费实例闲置 15 分钟会休眠，冷启动 20–60s，先打探针能让用户点「跟读」时后端已经醒了；`POST /api/score`、`POST /api/ocr` 首次超时还会自动唤醒并重试一次。
+
 ### POST /api/tts （领读语音合成）
 请求：
 ```json

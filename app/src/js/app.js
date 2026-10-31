@@ -190,6 +190,31 @@
     return false;
   };
 
+  /* ---------- 后端唤醒（Render 免费实例闲置 15 分钟会休眠） ---------- */
+  let lastWake = 0;
+  function wakeBackend(force) {
+    if (document.hidden) return;
+    if (!force && Date.now() - lastWake < 60 * 1000) return;
+    lastWake = Date.now();
+    const t0 = Date.now();
+    const p = Api.wake(force);
+    if (p && p.then) {
+      p.then((ok) => {
+        const ms = Date.now() - t0;
+        if (force && ok && ms > 2500) toast('后端已唤醒（' + Math.round(ms / 1000) + 's）');
+      });
+    }
+  }
+  APP.wakeBackend = wakeBackend;
+  // 安卓从后台切回前台（WebView 不一定触发 visibilitychange，靠原生回调）
+  APP.Native.onResume = () => wakeBackend(true);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) wakeBackend(true);
+  });
+  window.addEventListener('focus', () => wakeBackend(true));
+  // 前台一直用着也别让它睡着
+  setInterval(() => wakeBackend(), 8 * 60 * 1000);
+
   /* ---------- 启动 ---------- */
   function boot() {
     const s = Store.settings();
@@ -198,6 +223,7 @@
     bindMe();
     APP.ui.renderLibrary();
     go('library');
+    wakeBackend(true);
     if ('speechSynthesis' in window) {
       window.speechSynthesis.getVoices();
       window.speechSynthesis.onvoiceschanged = () => {};

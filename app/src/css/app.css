@@ -149,7 +149,7 @@ input{font-family:inherit}
 .btn:active{transform:scale(.96)}
 .btn.lead{background:var(--blue-soft);color:var(--blue)}
 .btn.follow{background:var(--brand);color:#fff;box-shadow:0 6px 14px rgba(255,122,89,.3)}
-.btn.slow{background:#F1F4F9;color:var(--sub);padding:10px 12px}
+.btn.slow{background:#F1F4F9;color:var(--sub);padding:10px 12px;font-size:12.5px;letter-spacing:.5px}
 .btn.stop{background:#fff;color:var(--bad);font-weight:800}
 .btn.ghost{background:#F1F4F9;color:#5C6B85}
 .btn.primary{background:var(--ink);color:#fff}

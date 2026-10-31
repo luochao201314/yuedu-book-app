@@ -189,7 +189,7 @@
               '<div class="actions">' +
               '<button class="btn lead" data-act="lead">🔊 领读</button>' +
               '<button class="btn follow" data-act="follow">🎤 跟读</button>' +
-              '<button class="btn slow" data-act="slow" aria-label="慢速">🐢</button>' +
+              '<button class="btn slow" data-act="slow" aria-label="慢读">慢读</button>' +
               '<span class="score-pill" hidden></span>' +
               '</div>' +
               '<div class="words" hidden></div>' +

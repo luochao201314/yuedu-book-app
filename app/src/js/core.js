@@ -193,15 +193,59 @@
     health() {
       return Api.req('/api/health', { cache: 'no-store' }, 45000);
     },
+    _wake: { at: 0, ok: null, busy: false, task: null },
+    /**
+     * 唤醒后端。Render 免费实例 15 分钟没请求就会休眠，冷启动要 30–60s。
+     * 前台切换时先打一枪 /api/health，用户点「跟读」时后端已经醒了。
+     * 10 分钟内确认过就不重复请求。
+     */
+    wake(force) {
+      const base = Api.base();
+      if (!base) return Promise.resolve(false);
+      const w = Api._wake;
+      if (!force && w.ok === true && Date.now() - w.at < 10 * 60 * 1000) return Promise.resolve(true);
+      if (w.task) return w.task;
+      const t0 = Date.now();
+      w.task = fetch(base + '/api/health', { cache: 'no-store' })
+        .then((r) => r.ok)
+        .catch(() => false)
+        .then((ok) => {
+          w.ok = ok;
+          w.at = Date.now();
+          w.busy = false;
+          w.task = null;
+          try {
+            if (APP.state) APP.state.backendAwake = ok;
+            APP.backendMs = Date.now() - t0;
+          } catch (e) {}
+          return ok;
+        });
+      w.busy = true;
+      return w.task;
+    },
+    /** 冷启动兜底：第一次超时/断网时唤醒再重试一次 */
+    async retryAfterWake(fn) {
+      try {
+        return await fn();
+      } catch (e) {
+        const cold = e && (e.code === 'timeout' || !e.status);
+        if (!cold) throw e;
+        const ok = await Api.wake(true);
+        if (!ok) throw e;
+        return await fn();
+      }
+    },
     books() {
       return Api.req('/api/books', { cache: 'no-store' }, 30000);
     },
     async score(text, wavB64) {
-      const data = await Api.req('/api/score', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text, audio: wavB64 }),
-      }, 90000);
+      const send = () =>
+        Api.req('/api/score', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text, audio: wavB64 }),
+        }, 90000);
+      const data = await Api.retryAfterWake(send);
       // 后端未配置密钥时会返回 mock，不能当真实评分
       if (data && data.mock) {
         const err = new Error('后端未配置语音评测密钥');
@@ -213,11 +257,13 @@
     },
     async ocr(imgB64, lang) {
       const img = /^data:/.test(imgB64) ? imgB64 : 'data:image/jpeg;base64,' + imgB64;
-      const data = await Api.req('/api/ocr', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: img, language: lang || 'eng' }),
-      }, 90000);
+      const send = () =>
+        Api.req('/api/ocr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: img, language: lang || 'eng' }),
+        }, 90000);
+      const data = await Api.retryAfterWake(send);
       if (data && data.mock) {
         const err = new Error('后端未配置 OCR 密钥');
         err.status = 200;
@@ -327,7 +373,11 @@
     onBookFile: null,
     onError: null,
     onAutoStop: null,
+    onResume: null,
   };
+  let photoBuf = {};
+  let photoTotal = 0;
+  let photoGot = 0;
   window.Native = {
     onPermission(ok) {
       if (Native.onPermission) Native.onPermission(!!ok);
@@ -340,6 +390,29 @@
       try { arr = JSON.parse(String(json || '[]')); } catch (e) { arr = []; }
       if (Native.onPhotos) Native.onPhotos(Array.isArray(arr) ? arr : []);
     },
+    /** 原生逐张回传（大图一次传送会被 WebView 截断），凑齐 n 张再回调 */
+    onPhotoItem(json) {
+      let o = null;
+      try { o = JSON.parse(String(json || '{}')); } catch (e) { o = null; }
+      if (!o || typeof o.i !== 'number' || typeof o.b !== 'string') return;
+      if (!photoTotal) {
+        photoTotal = o.n || 1;
+        photoBuf = {};
+        photoGot = 0;
+      }
+      if (!photoBuf[o.i]) {
+        photoBuf[o.i] = o.b;
+        photoGot++;
+      }
+      if (photoGot >= photoTotal) {
+        const arr = [];
+        for (let i = 0; i < photoTotal; i++) if (photoBuf[i]) arr.push(photoBuf[i]);
+        photoBuf = {};
+        photoTotal = 0;
+        photoGot = 0;
+        if (Native.onPhotos) Native.onPhotos(arr);
+      }
+    },
     onBookFile(json) {
       let obj = null;
       try { obj = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { obj = null; }
@@ -350,6 +423,9 @@
     },
     onAutoStop() {
       if (Native.onAutoStop) Native.onAutoStop();
+    },
+    onResume() {
+      if (Native.onResume) Native.onResume();
     },
   };
 
