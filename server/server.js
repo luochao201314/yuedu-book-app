@@ -63,7 +63,7 @@ const server = http.createServer(async (req, res) => {
       azure: !!process.env.AZURE_SPEECH_KEY,
       tts: !!process.env.AZURE_SPEECH_KEY,
       ocr: !!process.env.OCR_SPACE_KEY,
-      ver: 4
+      ver: 5
     });
   }
 
@@ -281,24 +281,40 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 单词音标（IPA）：代理 dictionaryapi.dev（免费、无密钥），结果内存缓存 24h
+  // 单词音标（IPA）：代理 dictionaryapi.dev（免费、无密钥），命中缓存 24h / 未命中只缓存 5 分钟
   if (u.pathname === '/api/ipa' && req.method === 'GET') {
     const w = String(u.searchParams.get('word') || '').trim().toLowerCase().replace(/[^a-z'\-]/g, '').slice(0, 40);
     if (!w) return send(res, 400, { error: 'word required' });
     const hit = ipaCache.get(w);
-    if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return send(res, 200, hit.data);
-    try {
+    const ttl = hit && !hit.data.ipa ? 5 * 60 * 1000 : 24 * 3600 * 1000;
+    if (hit && Date.now() - hit.at < ttl) return send(res, 200, hit.data);
+
+    const ask = async () => {
       const ir = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(w), {
         headers: { 'User-Agent': 'yuedu-book/1.0' },
         signal: AbortSignal.timeout(7000),
       });
-      if (ir.status === 404) {
-        const miss = { word: w, ipa: '', note: 'not found' };
-        ipaCache.set(w, { at: Date.now(), data: miss });
-        return send(res, 200, miss);
+      if (!ir.ok) {
+        const err = new Error('upstream ' + ir.status);
+        err.status = ir.status;
+        throw err;
       }
-      if (!ir.ok) throw new Error('upstream ' + ir.status);
-      const j = await ir.json();
+      return ir.json();
+    };
+
+    // dictionaryapi.dev 偶发 404（共享出口 IP 被限流），404 也重试一次再判定「查不到」
+    let j = null;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2 && !j; attempt++) {
+      try {
+        j = await ask();
+      } catch (e) {
+        lastErr = e;
+        if (e.status === 404 && attempt === 0) await new Promise((r) => setTimeout(r, 350));
+        else break;
+      }
+    }
+    if (j) {
       const e = Array.isArray(j) ? j[0] : null;
       const list = (e && e.phonetics) || [];
       let ipa = (e && e.phonetic) || '';
@@ -308,12 +324,17 @@ const server = http.createServer(async (req, res) => {
       }
       const audio = ((list.find(x => x && x.audio) || {}).audio) || '';
       const data = { word: w, ipa: ipa || '', audio: audio || '' };
+      if (!data.ipa) data.note = 'not found';
       ipaCache.set(w, { at: Date.now(), data });
       return send(res, 200, data);
-    } catch (e) {
-      // 上游抖动不要缓存，下次点这个词还能再试
-      return send(res, 200, { word: w, ipa: '', note: 'upstream' });
     }
+    if (lastErr && lastErr.status === 404) {
+      const miss = { word: w, ipa: '', note: 'not found' };
+      ipaCache.set(w, { at: Date.now(), data: miss });
+      return send(res, 200, miss);
+    }
+    // 上游抖动/超时：不缓存，下次点这个词还能再试
+    return send(res, 200, { word: w, ipa: '', note: 'upstream' });
   }
 
   // OCR（代理 OCR.space）

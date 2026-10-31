@@ -77,7 +77,7 @@ POST /api/score   → 502 {"error":"azure failed","msg":"SyntaxError: Unexpected
 
 ### GET /api/health
 ```json
-{ "ok": true, "azure": true, "tts": true, "ocr": true, "ver": 4 }
+{ "ok": true, "azure": true, "tts": true, "ocr": true, "ver": 5 }
 ```
 `ver` 是代码版本号，用来确认 Render 是否已经部署最新提交（线上 ver 落后就是没重新部署）。
 
@@ -115,7 +115,7 @@ App 把这个接口当作「叫醒」探针：启动、从后台切回前台（�
 ```json
 { "word": "water", "ipa": "", "note": "upstream" }
 ```
-- 数据源 `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`，免费、无密钥，服务端内存缓存 24h（只缓存 `not found`，上游抖动不缓存，下次点还能再试）。
+- 数据源 `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`，免费、无密钥；命中结果内存缓存 24h，`not found` 只缓存 5 分钟（共享出口 IP 偶尔被限流会假 404，所以 404 会先重试一次再判定），上游超时（7s）不缓存，下次点还能再试。
 - `audio` 是真人发音 mp3 直链，App 目前不用（点词走自己的 TTS），留着备用。
 - App 端 `yq.ipa.v1` 也会缓存到本机（最多 500 词），第二次点同一个词 0 秒出音标；拿不到就显示「音标暂缺」。
 
