@@ -40,10 +40,13 @@ input{font-family:inherit}
 .hello{font-size:12px;color:var(--sub);margin-bottom:2px}
 .page-title{font-size:24px;font-weight:800;letter-spacing:-.3px}
 .avatar{
-  width:42px;height:42px;border-radius:14px;flex:none;
+  min-width:42px;height:42px;max-width:44vw;border-radius:14px;flex:none;
+  padding:0 13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   background:linear-gradient(135deg,var(--brand),#FF9E7A);color:#fff;
-  font-weight:800;font-size:16px;box-shadow:0 6px 16px rgba(255,122,89,.35);
+  font-weight:800;font-size:14px;letter-spacing:.2px;
+  box-shadow:0 6px 16px rgba(255,122,89,.35);
 }
+.avatar:active{transform:scale(.94)}
 .icon-btn{
   width:40px;height:40px;border-radius:12px;background:#fff;box-shadow:var(--shadow-sm);
   display:grid;place-items:center;font-size:17px;flex:none;
@@ -327,6 +330,92 @@ input{font-family:inherit}
   .app{box-shadow:0 0 0 1px #DCE4F0,0 24px 60px rgba(31,42,68,.12);min-height:100vh}
 }
 
+/* ---------- 单词点击 + 音标 ---------- */
+.tw{cursor:pointer;border-radius:5px;padding:1px 0;transition:background .15s,color .15s;-webkit-tap-highlight-color:transparent}
+.tw:active{background:#E8F0FF}
+@media(hover:hover){.tw:hover{background:#F1F5FF;color:#2C4A7C}}
+.ipa-bar{
+  position:fixed;left:50%;bottom:calc(104px + var(--safe-b));z-index:75;max-width:min(92vw,420px);
+  transform:translateX(-50%) translateY(10px);opacity:0;pointer-events:none;
+  display:flex;align-items:baseline;gap:9px;
+  background:rgba(28,42,68,.96);color:#fff;border-radius:14px;padding:9px 15px;
+  box-shadow:0 14px 30px rgba(18,30,52,.3);transition:opacity .18s,transform .18s;
+}
+.ipa-bar.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.ipa-bar b{font-size:15px;font-weight:800;letter-spacing:.2px}
+.ipa-bar span{font-size:14.5px;color:#BFD8FF;font-family:"Segoe UI",system-ui,sans-serif;white-space:nowrap}
+
+/* ---------- 评分庆祝浮层 ---------- */
+.cele{
+  --c1:#FFC53D;--c2:#E8901C;
+  position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:22px;
+}
+.cele.tier-wonderful{--c1:#B49BFB;--c2:#7C6CF0}
+.cele.tier-great{--c1:#7FDCAD;--c2:#2FA26F}
+.cele.tier-good{--c1:#8FBBFF;--c2:#3F7ADF}
+.cele.tier-nice{--c1:#FFCE86;--c2:#D98A22}
+.cele.tier-keep{--c1:#B3C0D2;--c2:#6F8099}
+.cele-mask{position:absolute;inset:0;background:rgba(16,24,38,.44);backdrop-filter:blur(4px);opacity:0;transition:opacity .25s}
+.cele.show .cele-mask{opacity:1}
+.cele-card{
+  position:relative;width:100%;max-width:322px;padding:26px 22px 18px;border-radius:28px;text-align:center;
+  background:#fff;box-shadow:0 26px 64px rgba(14,24,42,.34);overflow:hidden;
+  transform:scale(.82) translateY(12px);opacity:0;
+  transition:transform .44s cubic-bezier(.16,1.32,.42,1),opacity .3s;
+}
+.cele.show .cele-card{transform:scale(1) translateY(0);opacity:1}
+.cele-card::before{
+  content:"";position:absolute;left:-20%;right:-20%;top:-140px;height:230px;border-radius:50%;
+  background:radial-gradient(circle at 50% 60%,var(--c1),transparent 68%);opacity:.28;
+}
+.tier-excellent .cele-card::after{
+  content:"";position:absolute;top:0;bottom:0;left:-70%;width:38%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.42),transparent);
+  animation:cele-shine 1.6s .3s ease-out;
+}
+.cele-rays{
+  position:absolute;z-index:0;left:50%;top:40px;width:240px;height:240px;margin-left:-120px;border-radius:50%;
+  background:conic-gradient(from 0deg,var(--c1) 0 10deg,transparent 10deg 30deg);opacity:0;
+  animation:cele-spin 14s linear infinite;
+}
+.cele.show .cele-rays{opacity:.15}
+.tier-keep .cele-rays{display:none}
+.cele-confetti{position:absolute;left:50%;top:2px;width:0;height:0;pointer-events:none;z-index:1}
+.cele-confetti i{
+  position:absolute;width:7px;height:11px;border-radius:2px;opacity:0;
+  animation:cele-fall 1.5s cubic-bezier(.2,.7,.4,1) forwards;animation-delay:var(--d,0ms);
+}
+.cele-badge{position:relative;z-index:2;font-size:46px;line-height:1;filter:drop-shadow(0 10px 16px rgba(20,32,54,.18));animation:cele-bob 1.8s ease-in-out infinite}
+.cele-score{position:relative;z-index:2;display:flex;align-items:baseline;justify-content:center;gap:4px;color:#1D2B45;margin-top:8px}
+.cele-score b{font-size:54px;font-weight:900;letter-spacing:-2.5px;line-height:1;animation:cele-num .62s cubic-bezier(.2,1.4,.4,1)}
+.cele-score i{font-size:15px;font-weight:800;color:#8A98AF;font-style:normal}
+.cele-grade{position:relative;z-index:2;font-size:19px;font-weight:900;color:var(--c2);margin-top:6px;letter-spacing:.2px;animation:cele-pop .5s .1s backwards}
+.cele-weak{
+  position:relative;z-index:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;
+  margin-top:14px;font-size:11.5px;color:#8593AB;
+}
+.cele-weak.ok{color:#5E8F6B;font-size:12px}
+.cele-w{
+  border:none;background:#F1F5FB;color:#3A4B68;font-weight:800;font-size:13px;
+  padding:6px 11px;border-radius:11px;transition:transform .12s;
+}
+.cele-w:active{transform:scale(.95)}
+.cele-actions{position:relative;z-index:2;display:flex;gap:9px;margin-top:18px}
+.cele-actions .btn{flex:1}
+@keyframes cele-spin{to{transform:rotate(360deg)}}
+@keyframes cele-num{0%{transform:scale(.55);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+@keyframes cele-pop{0%{transform:translateY(9px) scale(.92);opacity:0}100%{transform:none;opacity:1}}
+@keyframes cele-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes cele-fall{
+  0%{opacity:0;transform:translate(0,0) rotate(0)}
+  14%{opacity:1}
+  100%{opacity:0;transform:translate(var(--x),var(--y)) rotate(var(--r))}
+}
+@keyframes cele-shine{to{left:130%}}
+@media(prefers-reduced-motion:reduce){
+  .cele *,.tw{animation:none!important;transition:none!important}
+}
+
 </style>
 </head>
 <body>
@@ -506,6 +595,7 @@ input{font-family:inherit}
 
 <input type="file" id="filePick" accept="image/*" capture="environment" hidden />
 <div class="toast" id="toast"></div>
+<div class="ipa-bar" id="ipaBar" hidden><b id="ipaWord"></b><span id="ipaText"></span></div>
 <div class="loading" id="loading" hidden><div class="spinner"></div><span id="loadingText">加载中…</span></div>
 
 <script>
@@ -928,6 +1018,37 @@ window.SEED_BOOKS = [
       }
       return data;
     },
+    /** 单词音标（IPA）：后端代理 dictionaryapi.dev，结果本机缓存 */
+    async ipa(word) {
+      const w = String(word || '').toLowerCase().replace(/[^a-z'\-]/g, '');
+      if (!w) return { word: '', ipa: '' };
+      const cache = Store.get('yq.ipa.v1', {}) || {};
+      if (cache[w]) return cache[w];
+      let out = { word: w, ipa: '' };
+      const base = Api.base();
+      if (!base) return out;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 9000);
+      try {
+        const r = await fetch(base + '/api/ipa?word=' + encodeURIComponent(w), { signal: ctrl.signal });
+        if (r.ok) {
+          const j = await r.json();
+          out = { word: w, ipa: (j && j.ipa) || '' };
+        }
+      } catch (e) {
+      } finally {
+        clearTimeout(timer);
+      }
+      if (out.ipa) {
+        cache[w] = out;
+        try {
+          const keys = Object.keys(cache);
+          if (keys.length > 500) delete cache[keys[0]];
+          Store.set('yq.ipa.v1', cache);
+        } catch (e) {}
+      }
+      return out;
+    },
   };
 
   /* 强健的评分结果归一化：兼容多种字段命名 */
@@ -1168,10 +1289,14 @@ window.SEED_BOOKS = [
       }
     },
     speakWord(w) {
+      TTS.stop(); // 打断正在播的评分播报/领读，避免叠音
       TTS.speak(w, 0.7);
     },
     stop() {
       this._gen++; // 让任何在途的云端朗读作废
+      this._sayGen++; // 评分播报队列也一并作废
+      this._sayQueue = [];
+      this._sayPlaying = false;
       this._stopAudio();
       if (Native.available()) {
         try {
@@ -1256,25 +1381,126 @@ window.SEED_BOOKS = [
         self._praiseBusy = false;
       })();
     },
-    /** 评分播报：有缓存就立刻放；没缓存先用系统 TTS 秒回，同时后台补缓存 */
-    speakPraise(score) {
-      const word = this.grade(score);
-      const cache = this._loadPraise();
-      const b64 = cache[word];
-      if (b64) {
-        this._stopAudio();
-        try {
-          const el = new Audio('data:audio/mpeg;base64,' + b64);
-          this._audio = el;
-          el.play().catch(() => this._native(word, 1, {}, false));
-        } catch (e) {
-          this._native(word, 1, {}, false);
-        }
-        return word;
+    /* ---- 评分播报：等级词秒出 + 分数/薄弱词续播 ---- */
+    _sayGen: 0,
+    _sayQueue: [],
+    _sayPlaying: false,
+    _numEn(n) {
+      const ones = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+        'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+      const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+      const v = Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+      if (v < 20) return ones[v];
+      if (v === 100) return 'one hundred';
+      const t = Math.floor(v / 10), o = v % 10;
+      return tens[t] + (o ? '-' + ones[o] : '');
+    },
+    /** "Ninety-six. Practice: apple, water." —— 精炼、无中文长句 */
+    scoreLine(score, weak) {
+      const list = (weak || []).map((w) => String(w || '').trim()).filter(Boolean).slice(0, 3);
+      let t = this._numEn(score) + '.';
+      if (list.length) t += ' Practice: ' + list.join(', ') + '.';
+      return t;
+    },
+    _say(list) {
+      this._sayGen++;
+      this._stopAudio();
+      this._sayQueue = (list || []).filter(Boolean).slice();
+      this._sayPlaying = false;
+      if (this._sayQueue.length) this._sayNext();
+    },
+    _sayNext() {
+      const b64 = this._sayQueue.shift();
+      this._sayPlaying = false;
+      if (!b64) return;
+      const gen = this._sayGen;
+      this._sayPlaying = true;
+      let el;
+      try {
+        el = new Audio('data:audio/mpeg;base64,' + b64);
+      } catch (e) {
+        return;
       }
-      this._native(word, 1, {}, false);
-      this.prefetchPraise();
-      return word;
+      this._audio = el;
+      const next = () => {
+        if (gen === this._sayGen) this._sayNext();
+      };
+      el.onended = next;
+      el.onerror = next;
+      el.play().catch(next);
+    },
+    _queuePush(b64) {
+      if (!b64) return;
+      this._sayQueue.push(b64);
+      if (!this._sayPlaying) this._sayNext();
+    },
+    /** 取「分数 + 薄弱词」这一句的音频（缓存 / 云端合成），失败返回 null */
+    async _fetchLine(text) {
+      const cache = this._loadPraise();
+      const k = 's:' + text;
+      if (cache[k]) return cache[k];
+      try {
+        const r = await Api.req('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text, lang: 'en-US', rate: 0.98 }),
+        }, 15000);
+        if (r && r.audio) {
+          const c = this._loadPraise();
+          c[k] = r.audio;
+          // 只留最近 8 条，避免 localStorage 爆
+          const keys = Object.keys(c).filter((x) => x.indexOf('s:') === 0);
+          while (keys.length > 8) delete c[keys.shift()];
+          try {
+            const json = JSON.stringify(c);
+            if (json.length < 600000) {
+              if (Store.setRaw) Store.setRaw(this._praiseKey, json);
+              else localStorage.setItem(this._praiseKey, json);
+            }
+          } catch (e) {}
+          return r.audio;
+        }
+      } catch (e) {}
+      return null;
+    },
+    /**
+     * 评分播报：
+     * 1) 等级词（缓存命中）立刻出声
+     * 2) 紧接着 "Ninety-six. Practice: apple, water."（有缓存直接接，没有就现合成后接）
+     */
+    speakPraise(score, weak) {
+      const grade = this.grade(score);
+      const line = this.scoreLine(score, weak);
+      const cache = this._loadPraise();
+      const gClip = cache[grade];
+      const lClip = cache['s:' + line];
+
+      if (gClip && lClip) {
+        this._say([gClip, lClip]);
+        return grade;
+      }
+      if (gClip) this._say([gClip]);
+      else {
+        this._say([]);
+        this._native(grade, 1, {}, false);
+        this.prefetchPraise();
+      }
+      const gen = this._sayGen;
+      const push = (b64) => {
+        if (!b64 || gen !== this._sayGen) return;
+        this._queuePush(b64);
+      };
+      if (lClip) {
+        if (gClip) this._queuePush(lClip);
+        else setTimeout(() => push(lClip), 1200); // 系统 TTS 读等级词约 1 秒
+      } else {
+        this._fetchLine(line).then((b64) => {
+          if (!b64) return;
+          if (gClip) push(b64);
+          else setTimeout(() => push(b64), 1200);
+        });
+      }
+      return grade;
     },
   };
 
@@ -1674,6 +1900,151 @@ window.SEED_BOOKS = [
     return 'rgb(' + r + ',' + g + ',' + b + ')';
   }
 
+  /* ================= 单词：可点、发音、音标 ================= */
+  function wordsHtml(text) {
+    return String(text || '')
+      .split(/([A-Za-z][A-Za-z'’\-]*)/)
+      .map((part) => {
+        if (!part) return '';
+        if (/^[A-Za-z][A-Za-z'’\-]*$/.test(part)) {
+          const w = esc(part);
+          return '<span class="tw" data-w="' + w + '">' + w + '</span>';
+        }
+        return esc(part);
+      })
+      .join('');
+  }
+
+  let ipaGen = 0;
+  let ipaTimer = 0;
+  function sayWord(word) {
+    const w = String(word || '').trim().replace(/[^A-Za-z'’\-]/g, '');
+    if (!w) return;
+    TTS.speakWord(w);
+    showIpa(w);
+  }
+  async function showIpa(w) {
+    const bar = $('#ipaBar');
+    if (!bar) return;
+    const gen = ++ipaGen;
+    clearTimeout(ipaTimer);
+    $('#ipaWord').textContent = w;
+    $('#ipaText').textContent = '…';
+    bar.hidden = false;
+    requestAnimationFrame(() => bar.classList.add('show'));
+    let r = null;
+    try {
+      r = await Api.ipa(w);
+    } catch (e) {}
+    if (gen !== ipaGen) return;
+    $('#ipaText').textContent = r && r.ipa ? r.ipa : '音标暂缺';
+    ipaTimer = setTimeout(() => {
+      bar.classList.remove('show');
+      setTimeout(() => {
+        if (!bar.classList.contains('show')) bar.hidden = true;
+      }, 240);
+    }, 3400);
+  }
+
+  /* ================= 评分庆祝浮层 ================= */
+  const TIERS = [
+    { min: 95, key: 'excellent', badge: '🏆', pieces: 26 },
+    { min: 90, key: 'wonderful', badge: '🎉', pieces: 22 },
+    { min: 85, key: 'great', badge: '⭐', pieces: 16 },
+    { min: 78, key: 'good', badge: '👍', pieces: 10 },
+    { min: 70, key: 'nice', badge: '💪', pieces: 8 },
+    { min: 0, key: 'keep', badge: '🌱', pieces: 6 },
+  ];
+  function tierOf(score) {
+    const s = Number(score) || 0;
+    for (let i = 0; i < TIERS.length; i++) if (s >= TIERS[i].min) return TIERS[i];
+    return TIERS[TIERS.length - 1];
+  }
+  function confettiHtml(n) {
+    const colors = ['#FFD25A', '#FF8A65', '#7ED0A0', '#7AA8F7', '#C79BF2', '#FFB3C7'];
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const x = Math.round((Math.random() * 2 - 1) * 120);
+      const dy = 140 + Math.round(Math.random() * 90);
+      const r = Math.round(Math.random() * 900 - 450);
+      const d = Math.round(Math.random() * 220);
+      out +=
+        '<i style="--x:' + x + 'px;--y:' + dy + 'px;--r:' + r + 'deg;--d:' + d + 'ms;background:' +
+        colors[i % colors.length] + '"></i>';
+    }
+    return out;
+  }
+
+  let celeTimer = 0;
+  function celebrate(res, ctx) {
+    const t = tierOf(res.score);
+    const grade = TTS.grade(res.score);
+    const weak = (res.words || [])
+      .filter((w) => w.score < 75)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 3);
+    let el = $('#cele');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'cele';
+      document.body.appendChild(el);
+    }
+    clearTimeout(celeTimer);
+    el.className = 'cele tier-' + t.key;
+    el.innerHTML =
+      '<div class="cele-mask"></div>' +
+      '<div class="cele-card">' +
+      '<div class="cele-rays"></div>' +
+      '<div class="cele-confetti">' + confettiHtml(t.pieces) + '</div>' +
+      '<div class="cele-badge">' + t.badge + '</div>' +
+      '<div class="cele-score"><b>0</b><i>分</i></div>' +
+      '<div class="cele-grade">' + esc(grade) + '</div>' +
+      (weak.length
+        ? '<div class="cele-weak"><span>再练这几个词</span>' +
+          weak
+            .map((w) => '<button class="cele-w" data-w="' + esc(w.w) + '">' + esc(w.w) + '</button>')
+            .join('') +
+          '</div>'
+        : '<div class="cele-weak ok">这一句很稳，继续下一句</div>') +
+      '<div class="cele-actions">' +
+      '<button class="btn ghost" id="celeRetry">再读一次</button>' +
+      '<button class="btn primary" id="celeOk">继续</button>' +
+      '</div>' +
+      '</div>';
+    el.hidden = false;
+    requestAnimationFrame(() => el.classList.add('show'));
+
+    const numEl = $('.cele-score b', el);
+    const dur = 640;
+    const t0 = performance.now();
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      numEl.textContent = Math.round((Number(res.score) || 0) * eased);
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+
+    $$('.cele-w', el).forEach((b) => b.addEventListener('click', () => sayWord(b.dataset.w)));
+    $('#celeOk', el).onclick = closeCele;
+    $('#celeRetry', el).onclick = () => {
+      closeCele();
+      if (ctx && ctx.card) startFollow(ctx.card, ctx.text, ctx.key);
+    };
+    $('.cele-mask', el).onclick = closeCele;
+    celeTimer = setTimeout(closeCele, weak.length ? 5600 : 4000);
+  }
+
+  function closeCele() {
+    clearTimeout(celeTimer);
+    const el = $('#cele');
+    if (!el || el.hidden) return;
+    el.classList.remove('show');
+    setTimeout(() => {
+      if (!el.classList.contains('show')) el.hidden = true;
+    }, 260);
+  }
+
   /* ================= 绘本库 ================= */
   function greeting() {
     const h = new Date().getHours();
@@ -1683,7 +2054,7 @@ window.SEED_BOOKS = [
   function renderLibrary() {
     const s = Store.settings();
     $('#greet').textContent = greeting() + '，' + s.name;
-    $('#avatarBtn').textContent = (s.name || '宝').slice(0, 1);
+    $('#avatarBtn').textContent = s.name || '小宝';
 
     const st = APP.stats();
     $('#streakNum').textContent = st.streak;
@@ -1840,12 +2211,12 @@ window.SEED_BOOKS = [
             return (
               '<div class="sentence' + (rec ? ' done' : '') + '" data-key="' + key + '" data-pi="' + pi + '" data-si="' + si + '">' +
               '<div class="idx">' + String(n).padStart(2, '0') + '</div>' +
-              '<div class="en">' + esc(s.en) + '</div>' +
+              '<div class="en">' + wordsHtml(s.en) + '</div>' +
               (state.zh && s.zh ? '<div class="zh">' + esc(s.zh) + '</div>' : '') +
               '<div class="actions">' +
               '<button class="btn lead" data-act="lead">🔊 领读</button>' +
               '<button class="btn follow" data-act="follow">🎤 跟读</button>' +
-              '<button class="btn slow" data-act="slow" aria-label="慢读">慢读</button>' +
+              '<button class="btn slow" data-act="slow" aria-label="慢读">🐢 慢读</button>' +
               '<span class="score-pill" hidden></span>' +
               '</div>' +
               '<div class="words" hidden></div>' +
@@ -1868,11 +2239,12 @@ window.SEED_BOOKS = [
       if (saved) paintScore(card, saved, false);
       card.addEventListener('click', (ev) => {
         const btn = ev.target.closest('[data-act]');
-        if (!btn) {
-          const w = ev.target.closest('.w');
-          if (w) TTS.speakWord(w.textContent.trim());
+        const bw = ev.target.closest('.tw, .w');
+        if (bw) {
+          sayWord(bw.dataset.w || bw.textContent.trim());
           return;
         }
+        if (!btn) return;
         const act = btn.dataset.act;
         const s = Books.sentenceAt(b, pi, si);
         if (!s) return;
@@ -2058,13 +2430,18 @@ window.SEED_BOOKS = [
         dur: Math.round(ctx.dur * 10) / 10,
       });
       paintScore(ctx.card, res, true);
-      // 评分播报：等级词（Great! / Wonderful! …）走本地缓存，命中即出声
-      const grade = TTS.speakPraise(res.score);
+      // 播报：等级词（缓存秒出）+ 分数 + 薄弱词（精炼英文）
+      const weakWords = (res.words || [])
+        .filter((w) => w.score < 75)
+        .sort((a, b) => a.score - b.score)
+        .slice(0, 3)
+        .map((w) => w.w);
+      TTS.speakPraise(res.score, weakWords);
+      celebrate(res, ctx);
       showRecRow(ctx);
       renderReaderFoot();
       updateReaderBar();
       buzz(14);
-      toast(res.score + ' 分 · ' + grade);
     } catch (e) {
       const row = $('.rec-row', ctx.card);
       row.hidden = false;
@@ -2740,6 +3117,8 @@ window.SEED_BOOKS = [
     syncPublic: syncPublic,
     testApi: testApi,
     stopFollow: stopFollow,
+    celebrate: celebrate,
+    sayWord: sayWord,
     // 供本地调试/自动化校验的纯函数（无副作用）
     _ocr: {
       clean: cleanOcrText,

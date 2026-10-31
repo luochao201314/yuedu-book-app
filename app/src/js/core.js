@@ -272,6 +272,37 @@
       }
       return data;
     },
+    /** 单词音标（IPA）：后端代理 dictionaryapi.dev，结果本机缓存 */
+    async ipa(word) {
+      const w = String(word || '').toLowerCase().replace(/[^a-z'\-]/g, '');
+      if (!w) return { word: '', ipa: '' };
+      const cache = Store.get('yq.ipa.v1', {}) || {};
+      if (cache[w]) return cache[w];
+      let out = { word: w, ipa: '' };
+      const base = Api.base();
+      if (!base) return out;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 9000);
+      try {
+        const r = await fetch(base + '/api/ipa?word=' + encodeURIComponent(w), { signal: ctrl.signal });
+        if (r.ok) {
+          const j = await r.json();
+          out = { word: w, ipa: (j && j.ipa) || '' };
+        }
+      } catch (e) {
+      } finally {
+        clearTimeout(timer);
+      }
+      if (out.ipa) {
+        cache[w] = out;
+        try {
+          const keys = Object.keys(cache);
+          if (keys.length > 500) delete cache[keys[0]];
+          Store.set('yq.ipa.v1', cache);
+        } catch (e) {}
+      }
+      return out;
+    },
   };
 
   /* 强健的评分结果归一化：兼容多种字段命名 */
@@ -512,10 +543,14 @@
       }
     },
     speakWord(w) {
+      TTS.stop(); // 打断正在播的评分播报/领读，避免叠音
       TTS.speak(w, 0.7);
     },
     stop() {
       this._gen++; // 让任何在途的云端朗读作废
+      this._sayGen++; // 评分播报队列也一并作废
+      this._sayQueue = [];
+      this._sayPlaying = false;
       this._stopAudio();
       if (Native.available()) {
         try {
@@ -600,25 +635,126 @@
         self._praiseBusy = false;
       })();
     },
-    /** 评分播报：有缓存就立刻放；没缓存先用系统 TTS 秒回，同时后台补缓存 */
-    speakPraise(score) {
-      const word = this.grade(score);
-      const cache = this._loadPraise();
-      const b64 = cache[word];
-      if (b64) {
-        this._stopAudio();
-        try {
-          const el = new Audio('data:audio/mpeg;base64,' + b64);
-          this._audio = el;
-          el.play().catch(() => this._native(word, 1, {}, false));
-        } catch (e) {
-          this._native(word, 1, {}, false);
-        }
-        return word;
+    /* ---- 评分播报：等级词秒出 + 分数/薄弱词续播 ---- */
+    _sayGen: 0,
+    _sayQueue: [],
+    _sayPlaying: false,
+    _numEn(n) {
+      const ones = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+        'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+      const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+      const v = Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+      if (v < 20) return ones[v];
+      if (v === 100) return 'one hundred';
+      const t = Math.floor(v / 10), o = v % 10;
+      return tens[t] + (o ? '-' + ones[o] : '');
+    },
+    /** "Ninety-six. Practice: apple, water." —— 精炼、无中文长句 */
+    scoreLine(score, weak) {
+      const list = (weak || []).map((w) => String(w || '').trim()).filter(Boolean).slice(0, 3);
+      let t = this._numEn(score) + '.';
+      if (list.length) t += ' Practice: ' + list.join(', ') + '.';
+      return t;
+    },
+    _say(list) {
+      this._sayGen++;
+      this._stopAudio();
+      this._sayQueue = (list || []).filter(Boolean).slice();
+      this._sayPlaying = false;
+      if (this._sayQueue.length) this._sayNext();
+    },
+    _sayNext() {
+      const b64 = this._sayQueue.shift();
+      this._sayPlaying = false;
+      if (!b64) return;
+      const gen = this._sayGen;
+      this._sayPlaying = true;
+      let el;
+      try {
+        el = new Audio('data:audio/mpeg;base64,' + b64);
+      } catch (e) {
+        return;
       }
-      this._native(word, 1, {}, false);
-      this.prefetchPraise();
-      return word;
+      this._audio = el;
+      const next = () => {
+        if (gen === this._sayGen) this._sayNext();
+      };
+      el.onended = next;
+      el.onerror = next;
+      el.play().catch(next);
+    },
+    _queuePush(b64) {
+      if (!b64) return;
+      this._sayQueue.push(b64);
+      if (!this._sayPlaying) this._sayNext();
+    },
+    /** 取「分数 + 薄弱词」这一句的音频（缓存 / 云端合成），失败返回 null */
+    async _fetchLine(text) {
+      const cache = this._loadPraise();
+      const k = 's:' + text;
+      if (cache[k]) return cache[k];
+      try {
+        const r = await Api.req('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text, lang: 'en-US', rate: 0.98 }),
+        }, 15000);
+        if (r && r.audio) {
+          const c = this._loadPraise();
+          c[k] = r.audio;
+          // 只留最近 8 条，避免 localStorage 爆
+          const keys = Object.keys(c).filter((x) => x.indexOf('s:') === 0);
+          while (keys.length > 8) delete c[keys.shift()];
+          try {
+            const json = JSON.stringify(c);
+            if (json.length < 600000) {
+              if (Store.setRaw) Store.setRaw(this._praiseKey, json);
+              else localStorage.setItem(this._praiseKey, json);
+            }
+          } catch (e) {}
+          return r.audio;
+        }
+      } catch (e) {}
+      return null;
+    },
+    /**
+     * 评分播报：
+     * 1) 等级词（缓存命中）立刻出声
+     * 2) 紧接着 "Ninety-six. Practice: apple, water."（有缓存直接接，没有就现合成后接）
+     */
+    speakPraise(score, weak) {
+      const grade = this.grade(score);
+      const line = this.scoreLine(score, weak);
+      const cache = this._loadPraise();
+      const gClip = cache[grade];
+      const lClip = cache['s:' + line];
+
+      if (gClip && lClip) {
+        this._say([gClip, lClip]);
+        return grade;
+      }
+      if (gClip) this._say([gClip]);
+      else {
+        this._say([]);
+        this._native(grade, 1, {}, false);
+        this.prefetchPraise();
+      }
+      const gen = this._sayGen;
+      const push = (b64) => {
+        if (!b64 || gen !== this._sayGen) return;
+        this._queuePush(b64);
+      };
+      if (lClip) {
+        if (gClip) this._queuePush(lClip);
+        else setTimeout(() => push(lClip), 1200); // 系统 TTS 读等级词约 1 秒
+      } else {
+        this._fetchLine(line).then((b64) => {
+          if (!b64) return;
+          if (gClip) push(b64);
+          else setTimeout(() => push(b64), 1200);
+        });
+      }
+      return grade;
     },
   };
 

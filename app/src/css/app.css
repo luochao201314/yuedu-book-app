@@ -32,10 +32,13 @@ input{font-family:inherit}
 .hello{font-size:12px;color:var(--sub);margin-bottom:2px}
 .page-title{font-size:24px;font-weight:800;letter-spacing:-.3px}
 .avatar{
-  width:42px;height:42px;border-radius:14px;flex:none;
+  min-width:42px;height:42px;max-width:44vw;border-radius:14px;flex:none;
+  padding:0 13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   background:linear-gradient(135deg,var(--brand),#FF9E7A);color:#fff;
-  font-weight:800;font-size:16px;box-shadow:0 6px 16px rgba(255,122,89,.35);
+  font-weight:800;font-size:14px;letter-spacing:.2px;
+  box-shadow:0 6px 16px rgba(255,122,89,.35);
 }
+.avatar:active{transform:scale(.94)}
 .icon-btn{
   width:40px;height:40px;border-radius:12px;background:#fff;box-shadow:var(--shadow-sm);
   display:grid;place-items:center;font-size:17px;flex:none;
@@ -317,4 +320,90 @@ input{font-family:inherit}
 @media(min-width:520px){
   body{background:#E9EEF6}
   .app{box-shadow:0 0 0 1px #DCE4F0,0 24px 60px rgba(31,42,68,.12);min-height:100vh}
+}
+
+/* ---------- 单词点击 + 音标 ---------- */
+.tw{cursor:pointer;border-radius:5px;padding:1px 0;transition:background .15s,color .15s;-webkit-tap-highlight-color:transparent}
+.tw:active{background:#E8F0FF}
+@media(hover:hover){.tw:hover{background:#F1F5FF;color:#2C4A7C}}
+.ipa-bar{
+  position:fixed;left:50%;bottom:calc(104px + var(--safe-b));z-index:75;max-width:min(92vw,420px);
+  transform:translateX(-50%) translateY(10px);opacity:0;pointer-events:none;
+  display:flex;align-items:baseline;gap:9px;
+  background:rgba(28,42,68,.96);color:#fff;border-radius:14px;padding:9px 15px;
+  box-shadow:0 14px 30px rgba(18,30,52,.3);transition:opacity .18s,transform .18s;
+}
+.ipa-bar.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.ipa-bar b{font-size:15px;font-weight:800;letter-spacing:.2px}
+.ipa-bar span{font-size:14.5px;color:#BFD8FF;font-family:"Segoe UI",system-ui,sans-serif;white-space:nowrap}
+
+/* ---------- 评分庆祝浮层 ---------- */
+.cele{
+  --c1:#FFC53D;--c2:#E8901C;
+  position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:22px;
+}
+.cele.tier-wonderful{--c1:#B49BFB;--c2:#7C6CF0}
+.cele.tier-great{--c1:#7FDCAD;--c2:#2FA26F}
+.cele.tier-good{--c1:#8FBBFF;--c2:#3F7ADF}
+.cele.tier-nice{--c1:#FFCE86;--c2:#D98A22}
+.cele.tier-keep{--c1:#B3C0D2;--c2:#6F8099}
+.cele-mask{position:absolute;inset:0;background:rgba(16,24,38,.44);backdrop-filter:blur(4px);opacity:0;transition:opacity .25s}
+.cele.show .cele-mask{opacity:1}
+.cele-card{
+  position:relative;width:100%;max-width:322px;padding:26px 22px 18px;border-radius:28px;text-align:center;
+  background:#fff;box-shadow:0 26px 64px rgba(14,24,42,.34);overflow:hidden;
+  transform:scale(.82) translateY(12px);opacity:0;
+  transition:transform .44s cubic-bezier(.16,1.32,.42,1),opacity .3s;
+}
+.cele.show .cele-card{transform:scale(1) translateY(0);opacity:1}
+.cele-card::before{
+  content:"";position:absolute;left:-20%;right:-20%;top:-140px;height:230px;border-radius:50%;
+  background:radial-gradient(circle at 50% 60%,var(--c1),transparent 68%);opacity:.28;
+}
+.tier-excellent .cele-card::after{
+  content:"";position:absolute;top:0;bottom:0;left:-70%;width:38%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.42),transparent);
+  animation:cele-shine 1.6s .3s ease-out;
+}
+.cele-rays{
+  position:absolute;z-index:0;left:50%;top:40px;width:240px;height:240px;margin-left:-120px;border-radius:50%;
+  background:conic-gradient(from 0deg,var(--c1) 0 10deg,transparent 10deg 30deg);opacity:0;
+  animation:cele-spin 14s linear infinite;
+}
+.cele.show .cele-rays{opacity:.15}
+.tier-keep .cele-rays{display:none}
+.cele-confetti{position:absolute;left:50%;top:2px;width:0;height:0;pointer-events:none;z-index:1}
+.cele-confetti i{
+  position:absolute;width:7px;height:11px;border-radius:2px;opacity:0;
+  animation:cele-fall 1.5s cubic-bezier(.2,.7,.4,1) forwards;animation-delay:var(--d,0ms);
+}
+.cele-badge{position:relative;z-index:2;font-size:46px;line-height:1;filter:drop-shadow(0 10px 16px rgba(20,32,54,.18));animation:cele-bob 1.8s ease-in-out infinite}
+.cele-score{position:relative;z-index:2;display:flex;align-items:baseline;justify-content:center;gap:4px;color:#1D2B45;margin-top:8px}
+.cele-score b{font-size:54px;font-weight:900;letter-spacing:-2.5px;line-height:1;animation:cele-num .62s cubic-bezier(.2,1.4,.4,1)}
+.cele-score i{font-size:15px;font-weight:800;color:#8A98AF;font-style:normal}
+.cele-grade{position:relative;z-index:2;font-size:19px;font-weight:900;color:var(--c2);margin-top:6px;letter-spacing:.2px;animation:cele-pop .5s .1s backwards}
+.cele-weak{
+  position:relative;z-index:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;
+  margin-top:14px;font-size:11.5px;color:#8593AB;
+}
+.cele-weak.ok{color:#5E8F6B;font-size:12px}
+.cele-w{
+  border:none;background:#F1F5FB;color:#3A4B68;font-weight:800;font-size:13px;
+  padding:6px 11px;border-radius:11px;transition:transform .12s;
+}
+.cele-w:active{transform:scale(.95)}
+.cele-actions{position:relative;z-index:2;display:flex;gap:9px;margin-top:18px}
+.cele-actions .btn{flex:1}
+@keyframes cele-spin{to{transform:rotate(360deg)}}
+@keyframes cele-num{0%{transform:scale(.55);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+@keyframes cele-pop{0%{transform:translateY(9px) scale(.92);opacity:0}100%{transform:none;opacity:1}}
+@keyframes cele-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes cele-fall{
+  0%{opacity:0;transform:translate(0,0) rotate(0)}
+  14%{opacity:1}
+  100%{opacity:0;transform:translate(var(--x),var(--y)) rotate(var(--r))}
+}
+@keyframes cele-shine{to{left:130%}}
+@media(prefers-reduced-motion:reduce){
+  .cele *,.tw{animation:none!important;transition:none!important}
 }

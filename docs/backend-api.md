@@ -77,7 +77,7 @@ POST /api/score   → 502 {"error":"azure failed","msg":"SyntaxError: Unexpected
 
 ### GET /api/health
 ```json
-{ "ok": true, "azure": true, "tts": true, "ocr": true, "ver": 3 }
+{ "ok": true, "azure": true, "tts": true, "ocr": true, "ver": 4 }
 ```
 `ver` 是代码版本号，用来确认 Render 是否已经部署最新提交（线上 ver 落后就是没重新部署）。
 
@@ -101,6 +101,23 @@ App 把这个接口当作「叫醒」探针：启动、从后台切回前台（�
 > 2. SSML 的 `prosody rate` 只认百分比（`-38%` / `+40%`）或相对数，写成 `rate="1x"` 会被判非法。
 >    所以服务端先用百分比，失败再**去掉 prosody 重试一次**，两次都失败才降级。
 > 默认音色 `en-US-AriaNeural`（中文 `zh-CN-XiaoxiaoNeural`），可通过 `voice` 字段覆盖。
+
+### GET /api/ipa?word=water （单词音标）
+响应（成功）：
+```json
+{ "word": "water", "ipa": "/ˈwoːtə/", "audio": "https://api.dictionaryapi.dev/media/pronunciations/en/water-uk.mp3" }
+```
+查不到这个词：
+```json
+{ "word": "zzzzqqq", "ipa": "", "note": "not found" }
+```
+上游抖动/超时（7s 上限）：
+```json
+{ "word": "water", "ipa": "", "note": "upstream" }
+```
+- 数据源 `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`，免费、无密钥，服务端内存缓存 24h（只缓存 `not found`，上游抖动不缓存，下次点还能再试）。
+- `audio` 是真人发音 mp3 直链，App 目前不用（点词走自己的 TTS），留着备用。
+- App 端 `yq.ipa.v1` 也会缓存到本机（最多 500 词），第二次点同一个词 0 秒出音标；拿不到就显示「音标暂缺」。
 
 ### GET /api/books
 ```json

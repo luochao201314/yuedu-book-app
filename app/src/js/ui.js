@@ -18,6 +18,151 @@
     return 'rgb(' + r + ',' + g + ',' + b + ')';
   }
 
+  /* ================= 单词：可点、发音、音标 ================= */
+  function wordsHtml(text) {
+    return String(text || '')
+      .split(/([A-Za-z][A-Za-z'’\-]*)/)
+      .map((part) => {
+        if (!part) return '';
+        if (/^[A-Za-z][A-Za-z'’\-]*$/.test(part)) {
+          const w = esc(part);
+          return '<span class="tw" data-w="' + w + '">' + w + '</span>';
+        }
+        return esc(part);
+      })
+      .join('');
+  }
+
+  let ipaGen = 0;
+  let ipaTimer = 0;
+  function sayWord(word) {
+    const w = String(word || '').trim().replace(/[^A-Za-z'’\-]/g, '');
+    if (!w) return;
+    TTS.speakWord(w);
+    showIpa(w);
+  }
+  async function showIpa(w) {
+    const bar = $('#ipaBar');
+    if (!bar) return;
+    const gen = ++ipaGen;
+    clearTimeout(ipaTimer);
+    $('#ipaWord').textContent = w;
+    $('#ipaText').textContent = '…';
+    bar.hidden = false;
+    requestAnimationFrame(() => bar.classList.add('show'));
+    let r = null;
+    try {
+      r = await Api.ipa(w);
+    } catch (e) {}
+    if (gen !== ipaGen) return;
+    $('#ipaText').textContent = r && r.ipa ? r.ipa : '音标暂缺';
+    ipaTimer = setTimeout(() => {
+      bar.classList.remove('show');
+      setTimeout(() => {
+        if (!bar.classList.contains('show')) bar.hidden = true;
+      }, 240);
+    }, 3400);
+  }
+
+  /* ================= 评分庆祝浮层 ================= */
+  const TIERS = [
+    { min: 95, key: 'excellent', badge: '🏆', pieces: 26 },
+    { min: 90, key: 'wonderful', badge: '🎉', pieces: 22 },
+    { min: 85, key: 'great', badge: '⭐', pieces: 16 },
+    { min: 78, key: 'good', badge: '👍', pieces: 10 },
+    { min: 70, key: 'nice', badge: '💪', pieces: 8 },
+    { min: 0, key: 'keep', badge: '🌱', pieces: 6 },
+  ];
+  function tierOf(score) {
+    const s = Number(score) || 0;
+    for (let i = 0; i < TIERS.length; i++) if (s >= TIERS[i].min) return TIERS[i];
+    return TIERS[TIERS.length - 1];
+  }
+  function confettiHtml(n) {
+    const colors = ['#FFD25A', '#FF8A65', '#7ED0A0', '#7AA8F7', '#C79BF2', '#FFB3C7'];
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const x = Math.round((Math.random() * 2 - 1) * 120);
+      const dy = 140 + Math.round(Math.random() * 90);
+      const r = Math.round(Math.random() * 900 - 450);
+      const d = Math.round(Math.random() * 220);
+      out +=
+        '<i style="--x:' + x + 'px;--y:' + dy + 'px;--r:' + r + 'deg;--d:' + d + 'ms;background:' +
+        colors[i % colors.length] + '"></i>';
+    }
+    return out;
+  }
+
+  let celeTimer = 0;
+  function celebrate(res, ctx) {
+    const t = tierOf(res.score);
+    const grade = TTS.grade(res.score);
+    const weak = (res.words || [])
+      .filter((w) => w.score < 75)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 3);
+    let el = $('#cele');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'cele';
+      document.body.appendChild(el);
+    }
+    clearTimeout(celeTimer);
+    el.className = 'cele tier-' + t.key;
+    el.innerHTML =
+      '<div class="cele-mask"></div>' +
+      '<div class="cele-card">' +
+      '<div class="cele-rays"></div>' +
+      '<div class="cele-confetti">' + confettiHtml(t.pieces) + '</div>' +
+      '<div class="cele-badge">' + t.badge + '</div>' +
+      '<div class="cele-score"><b>0</b><i>分</i></div>' +
+      '<div class="cele-grade">' + esc(grade) + '</div>' +
+      (weak.length
+        ? '<div class="cele-weak"><span>再练这几个词</span>' +
+          weak
+            .map((w) => '<button class="cele-w" data-w="' + esc(w.w) + '">' + esc(w.w) + '</button>')
+            .join('') +
+          '</div>'
+        : '<div class="cele-weak ok">这一句很稳，继续下一句</div>') +
+      '<div class="cele-actions">' +
+      '<button class="btn ghost" id="celeRetry">再读一次</button>' +
+      '<button class="btn primary" id="celeOk">继续</button>' +
+      '</div>' +
+      '</div>';
+    el.hidden = false;
+    requestAnimationFrame(() => el.classList.add('show'));
+
+    const numEl = $('.cele-score b', el);
+    const dur = 640;
+    const t0 = performance.now();
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      numEl.textContent = Math.round((Number(res.score) || 0) * eased);
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+
+    $$('.cele-w', el).forEach((b) => b.addEventListener('click', () => sayWord(b.dataset.w)));
+    $('#celeOk', el).onclick = closeCele;
+    $('#celeRetry', el).onclick = () => {
+      closeCele();
+      if (ctx && ctx.card) startFollow(ctx.card, ctx.text, ctx.key);
+    };
+    $('.cele-mask', el).onclick = closeCele;
+    celeTimer = setTimeout(closeCele, weak.length ? 5600 : 4000);
+  }
+
+  function closeCele() {
+    clearTimeout(celeTimer);
+    const el = $('#cele');
+    if (!el || el.hidden) return;
+    el.classList.remove('show');
+    setTimeout(() => {
+      if (!el.classList.contains('show')) el.hidden = true;
+    }, 260);
+  }
+
   /* ================= 绘本库 ================= */
   function greeting() {
     const h = new Date().getHours();
@@ -27,7 +172,7 @@
   function renderLibrary() {
     const s = Store.settings();
     $('#greet').textContent = greeting() + '，' + s.name;
-    $('#avatarBtn').textContent = (s.name || '宝').slice(0, 1);
+    $('#avatarBtn').textContent = s.name || '小宝';
 
     const st = APP.stats();
     $('#streakNum').textContent = st.streak;
@@ -184,12 +329,12 @@
             return (
               '<div class="sentence' + (rec ? ' done' : '') + '" data-key="' + key + '" data-pi="' + pi + '" data-si="' + si + '">' +
               '<div class="idx">' + String(n).padStart(2, '0') + '</div>' +
-              '<div class="en">' + esc(s.en) + '</div>' +
+              '<div class="en">' + wordsHtml(s.en) + '</div>' +
               (state.zh && s.zh ? '<div class="zh">' + esc(s.zh) + '</div>' : '') +
               '<div class="actions">' +
               '<button class="btn lead" data-act="lead">🔊 领读</button>' +
               '<button class="btn follow" data-act="follow">🎤 跟读</button>' +
-              '<button class="btn slow" data-act="slow" aria-label="慢读">慢读</button>' +
+              '<button class="btn slow" data-act="slow" aria-label="慢读">🐢 慢读</button>' +
               '<span class="score-pill" hidden></span>' +
               '</div>' +
               '<div class="words" hidden></div>' +
@@ -212,11 +357,12 @@
       if (saved) paintScore(card, saved, false);
       card.addEventListener('click', (ev) => {
         const btn = ev.target.closest('[data-act]');
-        if (!btn) {
-          const w = ev.target.closest('.w');
-          if (w) TTS.speakWord(w.textContent.trim());
+        const bw = ev.target.closest('.tw, .w');
+        if (bw) {
+          sayWord(bw.dataset.w || bw.textContent.trim());
           return;
         }
+        if (!btn) return;
         const act = btn.dataset.act;
         const s = Books.sentenceAt(b, pi, si);
         if (!s) return;
@@ -402,13 +548,18 @@
         dur: Math.round(ctx.dur * 10) / 10,
       });
       paintScore(ctx.card, res, true);
-      // 评分播报：等级词（Great! / Wonderful! …）走本地缓存，命中即出声
-      const grade = TTS.speakPraise(res.score);
+      // 播报：等级词（缓存秒出）+ 分数 + 薄弱词（精炼英文）
+      const weakWords = (res.words || [])
+        .filter((w) => w.score < 75)
+        .sort((a, b) => a.score - b.score)
+        .slice(0, 3)
+        .map((w) => w.w);
+      TTS.speakPraise(res.score, weakWords);
+      celebrate(res, ctx);
       showRecRow(ctx);
       renderReaderFoot();
       updateReaderBar();
       buzz(14);
-      toast(res.score + ' 分 · ' + grade);
     } catch (e) {
       const row = $('.rec-row', ctx.card);
       row.hidden = false;
@@ -1084,6 +1235,8 @@
     syncPublic: syncPublic,
     testApi: testApi,
     stopFollow: stopFollow,
+    celebrate: celebrate,
+    sayWord: sayWord,
     // 供本地调试/自动化校验的纯函数（无副作用）
     _ocr: {
       clean: cleanOcrText,

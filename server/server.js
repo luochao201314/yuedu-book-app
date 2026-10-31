@@ -23,6 +23,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 
 const MAX_BODY = 16 * 1024 * 1024;   // 16MB（约 12MB 音频 base64）
 const MAX_AUDIO = 12 * 1024 * 1024;
+const ipaCache = new Map();          // 单词 → { at, data }
 
 function send(res, code, obj, headers = {}) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
@@ -62,7 +63,7 @@ const server = http.createServer(async (req, res) => {
       azure: !!process.env.AZURE_SPEECH_KEY,
       tts: !!process.env.AZURE_SPEECH_KEY,
       ocr: !!process.env.OCR_SPACE_KEY,
-      ver: 3
+      ver: 4
     });
   }
 
@@ -277,6 +278,41 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.error('[tts] error', e);
       return send(res, 200, { mock: true, audio: '', note: '云端朗读异常，已退回设备朗读', detail: String(e).slice(0, 160) });
+    }
+  }
+
+  // 单词音标（IPA）：代理 dictionaryapi.dev（免费、无密钥），结果内存缓存 24h
+  if (u.pathname === '/api/ipa' && req.method === 'GET') {
+    const w = String(u.searchParams.get('word') || '').trim().toLowerCase().replace(/[^a-z'\-]/g, '').slice(0, 40);
+    if (!w) return send(res, 400, { error: 'word required' });
+    const hit = ipaCache.get(w);
+    if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return send(res, 200, hit.data);
+    try {
+      const ir = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(w), {
+        headers: { 'User-Agent': 'yuedu-book/1.0' },
+        signal: AbortSignal.timeout(7000),
+      });
+      if (ir.status === 404) {
+        const miss = { word: w, ipa: '', note: 'not found' };
+        ipaCache.set(w, { at: Date.now(), data: miss });
+        return send(res, 200, miss);
+      }
+      if (!ir.ok) throw new Error('upstream ' + ir.status);
+      const j = await ir.json();
+      const e = Array.isArray(j) ? j[0] : null;
+      const list = (e && e.phonetics) || [];
+      let ipa = (e && e.phonetic) || '';
+      if (!ipa) {
+        const p = list.find(x => x && x.text);
+        ipa = p ? p.text : '';
+      }
+      const audio = ((list.find(x => x && x.audio) || {}).audio) || '';
+      const data = { word: w, ipa: ipa || '', audio: audio || '' };
+      ipaCache.set(w, { at: Date.now(), data });
+      return send(res, 200, data);
+    } catch (e) {
+      // 上游抖动不要缓存，下次点这个词还能再试
+      return send(res, 200, { word: w, ipa: '', note: 'upstream' });
     }
   }
 
