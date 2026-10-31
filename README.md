@@ -3,7 +3,7 @@
 给小学生练英语分级阅读的**本地优先** App：听外教朗读 → 跟读录音 → 发音评分与逐词纠错 → 成长记录与薄弱点。支持拍照批量录入/导入本地书籍。
 
 - 安装包：`release/yuedu-1.0.0.apk`（约 0.12 MB，无第三方 SDK，`tools/build-apk.ps1` 生成）
-- SHA256：`5E5E832B42770836D8A0906FD4552BA8123428E0C7A59322CB2AB8E1A75CD268`（重新出包会变）
+- SHA256：`C968CC70991D640BEF79FA743930D4D1BF689A5654D0EB6FBFA40A90C390735E`（重新出包会变）
 - 最低系统：Android 7.0（API 24），目标 API 34，竖屏
 - 后端：`https://yuedu-book-backend.onrender.com`（可在 App「我的」里改）
 - 线上状态：评分 / OCR / 古登堡代理均已实测通过（评分示例：`score 98 / fluency 100 / completeness 100`，逐词分正常）

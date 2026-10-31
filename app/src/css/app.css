@@ -310,7 +310,7 @@ input{font-family:inherit}
 }
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .loading{position:fixed;inset:0;background:rgba(245,247,251,.72);backdrop-filter:blur(3px);display:grid;place-items:center;z-index:70;gap:10px}
-.loading[hidden]{display:none}
+[hidden]{display:none!important}
 .loading>span{position:absolute;top:calc(50% + 34px);font-size:12.5px;color:var(--sub)}
 .spinner{width:34px;height:34px;border:3px solid #E1E8F3;border-top-color:var(--brand);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}

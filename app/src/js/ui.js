@@ -10,8 +10,8 @@
   const DAY_CN = ['日', '一', '二', '三', '四', '五', '六'];
 
   function shade(hex, amt) {
-    const c = hex.replace('#', '');
-    const n = parseInt(c, 16);
+    const c = String(hex || '#7C8FB5').replace('#', '');
+    const n = parseInt(c, 16) || 0x7c8fb5;
     const r = Math.max(0, Math.min(255, (n >> 16) + (amt || -30)));
     const g = Math.max(0, Math.min(255, ((n >> 8) & 255) + (amt || -30)));
     const b = Math.max(0, Math.min(255, (n & 255) + (amt || -30)));
@@ -64,7 +64,7 @@
         const p = Books.progress(b);
         return (
           '<div class="book" data-id="' + b.id + '">' +
-          '<div class="cover" style="background:linear-gradient(135deg,' + b.color + ',' + shade(b.color, -34) + ')">' +
+          '<div class="cover" style="background:linear-gradient(135deg,' + (b.color || '#7C8FB5') + ',' + shade(b.color, -34) + ')">' +
           '<span class="lvl">' + esc(b.level) + '</span>' +
           '<span class="pct">' + (p.pct >= 100 ? '✓ 读完' : p.pct + '%') + '</span>' +
           '<span>' + (b.emoji || '📖') + '</span>' +
