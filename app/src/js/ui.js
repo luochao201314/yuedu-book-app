@@ -365,6 +365,14 @@
     if (pr.pct >= 100) $('#readerBar').style.width = '100%';
     else $('#readerBar').style.width = pr.pct + '%';
 
+    // 后台预取当前页的自然语音：用户点「领读」时直接秒出，不用等合成
+    const firstPage = (b.pages || [])[0];
+    if (firstPage && firstPage.sentences) {
+      const rate = Store.settings().rate;
+      const texts = firstPage.sentences.filter((s) => !(s.a && b.audio)).map((s) => s.en);
+      if (texts.length) TTS.prefetch(texts, rate);
+    }
+
     $$('.sentence', list).forEach((card) => {
       const pi = Number(card.dataset.pi), si = Number(card.dataset.si);
       const key = card.dataset.key;
@@ -1231,7 +1239,8 @@
     $('#sheetBody').innerHTML =
       '<h3>🎧 音频绘本</h3>' +
       '<div class="desc">有原版音频就用原声领读：先自动转成文稿，领读直接播这段录音，<b>跟读评分仍是原来的发音评测</b>。' +
-      '<br><span class="muted">支持百度网盘、音频直链、手机里的音频文件；单次建议 5 分钟以内（最长 8 分钟）。</span></div>' +
+      '<br><span class="muted">支持百度网盘、音频直链、手机里的音频文件；单次建议 5 分钟以内（最长 8 分钟）。' +
+      '<br>💡 网盘最快的用法：在百度网盘 App 里长按音频 → <b>分享 → 悦读绘本</b>，音频会直接送进来。</span></div>' +
       '<div class="chips" id="audioTabs" style="margin-bottom:10px">' +
       '<button class="chip on" data-tab="url">音频链接</button>' +
       '<button class="chip" data-tab="pan">百度网盘</button>' +
@@ -1268,6 +1277,23 @@
       $('#audioSave').disabled = !$('#audioText').value.trim();
     });
     $('#audioSave').onclick = saveAudioBook;
+  }
+
+  /** 从别的 App 分享音频进来：直接打开面板并预选，用户点一下「开始转写」即可 */
+  function openAudioFromShare(obj) {
+    if (!obj || !obj.blob) return;
+    const label = obj.name || '网盘音频';
+    try {
+      openAudio();
+      chooseAudio({ kind: 'blob', blob: obj.blob }, label);
+      const chip = $('#audioTabs .chip[data-tab="local"]');
+      if (chip) chip.click();
+      const st = $('#audioState');
+      if (st) st.textContent = '已收到：' + label + '（来自网盘分享），点「开始转写」';
+      toast('已收到音频：' + label);
+    } catch (e) {
+      toast('接收音频失败：' + (e.message || ''));
+    }
   }
 
   function chooseAudio(src, label) {
@@ -1328,23 +1354,52 @@
       $('#panState').textContent = '后端连接失败：' + (e.message || '网络错误');
       return;
     }
+    // 不管有没有配 AppKey，都先给「唤起网盘 App → 分享过来」这条路，它不需要任何配置
     if (!cfg || !cfg.baidu) {
       $('#panState').innerHTML =
-        '后端还没配置百度网盘应用，暂时用不了网盘。<br>可先用「音频链接」导入直链音频；' +
-        '要开网盘：去百度网盘开放平台建应用，把 AppKey / SecretKey 填到 Render 环境变量 ' +
-        '<b>BAIDU_PAN_APPKEY</b> / <b>BAIDU_PAN_SECRET</b>，回调地址填 <b>后端域名/api/pan/baidu/callback</b>。';
+        '<b>用百度网盘 App 直接送过来（推荐，不用配置）</b><br>' +
+        '点下面的按钮打开百度网盘 → 找到音频长按 → <b>分享</b> → 选「悦读绘本」→ 回来就能转写。<br>' +
+        '<span class="muted">想直接在 App 里浏览网盘目录，才需要在后端配 AppKey / SecretKey。</span>';
+      const b = document.createElement('button');
+      b.className = 'btn primary';
+      b.style.marginTop = '10px';
+      b.textContent = '📂 打开百度网盘';
+      b.onclick = () => openPanWithHint();
+      $('#panState').appendChild(b);
       return;
     }
     const state = String(Store.settings().panState || '');
     const sess = state ? await Api.panSession(state).catch(() => null) : null;
     if (sess && sess.ok) return panListDir(pane, state, '/');
-    $('#panState').innerHTML = '还没连接百度网盘。<br>';
+    $('#panState').innerHTML =
+      '还没连接百度网盘。可以直接在 App 里浏览网盘，也可以走「网盘 App → 分享 → 悦读绘本」更快。<br>';
     const btn = document.createElement('button');
     btn.className = 'btn primary';
     btn.style.marginTop = '10px';
     btn.textContent = '连接百度网盘';
     btn.onclick = () => connectPan(pane, btn);
     $('#panState').appendChild(btn);
+    const b2 = document.createElement('button');
+    b2.className = 'btn ghost';
+    b2.style.margin = '10px 0 0 8px';
+    b2.textContent = '📂 打开网盘 App';
+    b2.onclick = () => openPanWithHint();
+    $('#panState').appendChild(b2);
+  }
+
+  /** 唤起百度网盘客户端，并告诉用户接下来怎么把音频送进来 */
+  function openPanWithHint() {
+    if (!Native.available()) {
+      toast('网页版不支持唤起 App，请在手机上打开');
+      APP.openExternal('https://pan.baidu.com');
+      return;
+    }
+    Native.onPanApp = (via) => {
+      Native.onPanApp = null;
+      if (via === 'web') toast('没检测到百度网盘 App，已打开网页版');
+    };
+    APP.openPanApp();
+    toast('在网盘里长按音频 → 分享到「悦读绘本」');
   }
 
   async function connectPan(pane, btn) {
@@ -1354,12 +1409,9 @@
     if (!r || !r.url) return toast((r && r.note) || '获取授权地址失败');
     btn.disabled = true;
     btn.textContent = '等待授权…';
-    const w = window.open(r.url, '_blank');
-    if (!w) {
-      // 安卓 WebView 里没有多窗口，直接在本页跳转；回来后会按已保存的 state 自动接上
-      location.href = r.url;
-      return;
-    }
+    // 授权页交给系统浏览器：WebView 里没有百度登录态，会一直卡在登录页
+    // 手机上若已登录百度账号，浏览器里点一下就能授权；回来时下面的轮询会自动接上
+    APP.openExternal(r.url);
     let tries = 0;
     const timer = setInterval(async () => {
       tries++;
@@ -1584,6 +1636,7 @@
     openOCR: openOCR,
     openImport: openImport,
     openAudio: openAudio,
+    openAudioFromShare: openAudioFromShare,
     closeSheet: closeSheet,
     syncPublic: syncPublic,
     testApi: testApi,

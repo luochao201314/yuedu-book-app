@@ -440,6 +440,7 @@
     onError: null,
     onAutoStop: null,
     onResume: null,
+    onPanApp: null,
   };
   let photoBuf = {};
   let photoTotal = 0;
@@ -490,7 +491,21 @@
     onAudio(json) {
       let obj = null;
       try { obj = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { obj = null; }
+      if (obj && obj.error) { toast(obj.error); return; }
       if (Native.onAudio) Native.onAudio(obj);
+      else if (obj && obj.b64) {
+        // 用户从别的 App 分享音频进来（百度网盘长按→分享→悦读绘本），没有待处理的 picker 回调
+        try {
+          const bytes = new Uint8Array(b64ToBuf(obj.b64));
+          const blob = new Blob([bytes], { type: obj.mime || 'audio/mpeg' });
+          if (APP.ui && APP.ui.openAudioFromShare) {
+            APP.ui.openAudioFromShare({ blob: blob, name: obj.name || '网盘音频' });
+          }
+        } catch (e) {}
+      }
+    },
+    onPanApp(via) {
+      if (Native.onPanApp) Native.onPanApp(via);
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
@@ -510,11 +525,63 @@
     _audio: null,        // 云端音频播放元素
     _gen: 0,             // 代际令牌：用于打断“正在路上”的云端朗读
     _cloud: { ok: null, at: 0 }, // 云端可用性缓存，避免每次点击都白等
+    _cache: new Map(),   // 合成结果缓存：key → blob url（同一句第二次点直接秒播）
+    _cacheMax: 80,
+    _waitTip: 0,
+    _ckey(text, speed, isZh) {
+      return (isZh ? 'zh' : 'en') + '|' + speed + '|' + String(text).slice(0, 300);
+    },
+    _cachePut(key, b64) {
+      try {
+        const bin = b64ToBuf(b64);
+        const url = URL.createObjectURL(new Blob([new Uint8Array(bin)], { type: 'audio/mpeg' }));
+        // 超上限先淘汰最早的，并释放 objectURL，避免内存一直涨
+        if (this._cache.size >= this._cacheMax) {
+          const first = this._cache.keys().next().value;
+          const old = this._cache.get(first);
+          if (old) { try { URL.revokeObjectURL(old); } catch (e) {} }
+          this._cache.delete(first);
+        }
+        this._cache.set(key, url);
+        return url;
+      } catch (e) {
+        return null;
+      }
+    },
+    _playUrl(url) {
+      this._stopAudio();
+      const el = new Audio(url);
+      this._audio = el;
+      this.speaking = true;
+      const done = () => {
+        if (this._audio === el) { this._audio = null; this.speaking = false; }
+      };
+      el.addEventListener('ended', done);
+      el.addEventListener('error', done);
+      const p = el.play();
+      if (p && p.catch) {
+        p.catch(() => {
+          done();
+          // WebView 偶发拦截自动播放时，退回设备朗读，别让人以为坏了
+          if (this._lastText) this._native(this._lastText, this._lastSpeed || 1, {}, this._lastZh);
+        });
+      }
+    },
     speak(text, rate, opts) {
       const o = opts || {};
       const speed = Math.max(0.5, Math.min(1.4, rate || Store.settings().rate));
       const isZh = /[一-鿿]/.test(text);
+      this._lastSpeed = speed;
+      this._lastZh = isZh;
+      this._lastText = text;
       const token = ++this._gen; // 本次朗读的令牌
+      // 命中缓存 → 同步立刻播，零等待
+      const key = this._ckey(text, speed, isZh);
+      const hit = this._cache.get(key);
+      if (hit) {
+        this._playUrl(hit);
+        return true;
+      }
       // 优先云端神经网络朗读（更自然、不机械）；失败/未配置再退回设备原生 TTS
       this._speakCloud(text, speed, isZh, token).then((used) => {
         if (token === this._gen && !used) this._native(text, speed, o, isZh);
@@ -522,17 +589,33 @@
       return true;
     },
     async _speakCloud(text, speed, isZh, token) {
-      // 20s 内曾失败则跳过云端，避免反复白等（Render 冷启动常超时，窗口别太长）
-      if (this._cloud.ok === false && Date.now() - this._cloud.at < 20000) return false;
+      // 失败后 90 秒内跳过云端（Render 冷启动期间反复白等没意义），但不影响已缓存句子
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 90000) return false;
       try {
         const base = Api.base();
         if (!base) return false;
         const lang = isZh ? 'zh-CN' : 'en-US';
-        const r = await Api.req('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text, lang: lang, rate: Math.round(speed * 100) / 100 }),
-        }, 15000); // 冷启动可能要十几秒；超时再退回原生，不卡界面
+        // 冷启动乐观一点：从没成功过给 30s，成功过给 12s
+        const tmo = this._cloud.ok === true ? 12000 : 30000;
+        // 超过 1.5s 还没回来，提示一次，避免用户以为点了没反应
+        clearTimeout(this._waitTip);
+        this._waitTip = setTimeout(() => {
+          if (token === this._gen) toast('正在准备自然语音…', 1600);
+        }, 1500);
+        let r = null;
+        try {
+          r = await Api.req('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, lang: lang, rate: Math.round(speed * 100) / 100 }),
+          }, tmo);
+        } catch (e) {
+          // 超时多半是冷启动：先踢一下 /api/health 把实例叫醒，下次点击就能命中
+          if (e && e.code === 'timeout') Api.wake(true);
+          throw e;
+        } finally {
+          clearTimeout(this._waitTip);
+        }
         if (token !== this._gen) return false; // 已被新朗读/停止打断，丢弃
         if (!r || r.mock || !r.audio) {
           this._cloud = { ok: false, at: Date.now() };
@@ -544,17 +627,46 @@
           return false;
         }
         this._cloud.ok = true;
-        this._stopAudio();
-        const el = new Audio('data:audio/mpeg;base64,' + r.audio);
-        this._audio = el;
-        el.play().catch(() => {});
+        const key = this._ckey(text, speed, isZh);
+        const url = this._cachePut(key, r.audio);
+        if (!url) return false;
+        this._playUrl(url);
         return true;
       } catch (e) {
         this._cloud = { ok: false, at: Date.now() };
         return false;
       }
     },
+    /** 后台预取：进阅读页时把当前页句子先合成好，点领读就是秒出自然音 */
+    prefetch(texts, rate) {
+      const base = Api.base();
+      if (!base || !texts || !texts.length) return;
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 90000) return;
+      if (this._prefetching) return;
+      this._prefetching = true;
+      const queue = texts.slice(0, 12);
+      const step = () => {
+        const t = queue.shift();
+        if (!t) { this._prefetching = false; return; }
+        const isZh = /[一-鿿]/.test(t);
+        const speed = Math.max(0.5, Math.min(1.4, rate || 1));
+        const key = this._ckey(t, speed, isZh);
+        if (this._cache.has(key)) return step();
+        Api.req('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: t, lang: isZh ? 'zh-CN' : 'en-US', rate: Math.round(speed * 100) / 100 }),
+        }, 30000).then((r) => {
+          if (r && !r.mock && r.audio) {
+            this._cloud.ok = true;
+            this._cachePut(key, r.audio);
+          }
+        }).catch(() => {}).then(() => setTimeout(step, 120));
+      };
+      step();
+    },
     _stopAudio() {
+      this.speaking = false;
       if (this._audio) {
         try { this._audio.pause(); this._audio.currentTime = 0; } catch (e) {}
         this._audio = null;
@@ -1389,6 +1501,34 @@
     });
   }
 
+  /* ---------------- 唤起网盘 App / 系统浏览器 ---------------- */
+  function openPanApp() {
+    if (!Native.available()) {
+      window.open('https://pan.baidu.com', '_blank');
+      return false;
+    }
+    try {
+      Android.openPanApp();
+      return true;
+    } catch (e) {
+      toast('打不开百度网盘');
+      return false;
+    }
+  }
+
+  /** 外部链接优先交给系统浏览器（WebView 内没有登录态，授权页会反复要求登录） */
+  function openExternal(url) {
+    if (!url) return;
+    if (Native.available()) {
+      try {
+        Android.openUrl(url);
+        return;
+      } catch (e) {}
+    }
+    const w = window.open(url, '_blank');
+    if (!w) location.href = url;
+  }
+
   /* ---------------- 选择本地音频 ---------------- */
   function pickAudioFile() {
     return new Promise((resolve, reject) => {
@@ -1538,6 +1678,8 @@
   APP.pickPhotos = pickPhotos;
   APP.pickBookFile = pickBookFile;
   APP.pickAudioFile = pickAudioFile;
+  APP.openPanApp = openPanApp;
+  APP.openExternal = openExternal;
   APP.fileToB64 = fileToB64;
   APP.normalizeScore = normalizeScore;
   APP.books = { all: allBooks, byId: bookById, sentenceAt: sentenceAt, count: sentenceCount, progress: bookProgress };

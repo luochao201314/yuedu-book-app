@@ -57,7 +57,7 @@ public class MainActivity extends Activity {
     private static final int REQ_GALLERY = 103;
     private static final int REQ_GALLERY_MULTI = 104;
     private static final int REQ_FILE = 105;
-    private static final int REQ_AUDIO = 106;
+    private static final int REQ_AUDIO_CLIP = 106;   // 选音频文件（与录音权限 REQ_AUDIO 区分，否则编译报重复定义）
     private static final int MAX_PICK_IMAGES = 20;
     private static final int MAX_BOOK_BYTES = 12 * 1024 * 1024;
     private static final int SAMPLE_RATE = 16000;
@@ -75,6 +75,9 @@ public class MainActivity extends Activity {
     private ByteArrayOutputStream pcmOut;
     private Uri cameraUri;
     private String lastRecording = null;
+    // 从别的 App（百度网盘 / 文件管理器）分享进来的音频；页面没准备好时先挂起
+    private Uri pendingSharedAudio = null;
+    private volatile boolean webReady = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -103,7 +106,13 @@ public class MainActivity extends Activity {
         web.setBackgroundColor(0xFFF5F7FB);
         web.addJavascriptInterface(new Bridge(), "Android");
 
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                webReady = true;
+                flushSharedAudio();
+            }
+        });
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
@@ -121,6 +130,44 @@ public class MainActivity extends Activity {
         }
 
         initTts();
+        handleSharedIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleSharedIntent(intent);
+    }
+
+    /** 处理「从别的 App 分享/打开音频到本 App」的 Intent（百度网盘长按→分享→悦读绘本） */
+    private void handleSharedIntent(Intent intent) {
+        if (intent == null) return;
+        String act = intent.getAction();
+        Uri uri = null;
+        if (Intent.ACTION_SEND.equals(act)) {
+            Object o = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (o instanceof Uri) uri = (Uri) o;
+        } else if (Intent.ACTION_VIEW.equals(act)) {
+            uri = intent.getData();
+        }
+        if (uri == null) return;
+        String mime = null;
+        try { mime = getContentResolver().getType(uri); } catch (Exception ignored) {}
+        // 只接音频；分享进来的若是其它类型就忽略，不打断正常启动
+        if (mime != null && !mime.startsWith("audio") && !mime.contains("mpeg") && !mime.contains("mp4")) return;
+        pendingSharedAudio = uri;
+        flushSharedAudio();
+    }
+
+    /** 页面就绪后把挂起的分享音频交给前端 */
+    private void flushSharedAudio() {
+        if (!webReady || pendingSharedAudio == null) return;
+        final Uri u = pendingSharedAudio;
+        pendingSharedAudio = null;
+        runOnUiThread(new Runnable() {
+            @Override public void run() { handleAudio(u); }
+        });
     }
 
     private String readAsset(String name) throws Exception {
@@ -361,7 +408,7 @@ public class MainActivity extends Activity {
             else js("window.Native.onBookFile('{}')");
             return;
         }
-        if (req == REQ_AUDIO) {
+        if (req == REQ_AUDIO_CLIP) {
             if (res == RESULT_OK && data != null && data.getData() != null) handleAudio(data.getData());
             else js("window.Native.onAudio('{}')");
             return;
@@ -498,6 +545,45 @@ public class MainActivity extends Activity {
         if (n.endsWith(".flac")) return "audio/flac";
         if (n.endsWith(".mp4")) return "audio/mp4";
         return "audio/mpeg";
+    }
+
+    /**
+     * 唤起百度网盘客户端。
+     * 说明：百度网盘的 OAuth 授权只能走网页（官方未开放客户端授权 deeplink），
+     * 所以这里的定位是「帮你把网盘 App 叫起来，你在里面挑好音频→分享到悦读绘本」，
+     * 分享回来后由 handleSharedIntent 直接接管并送进转写。
+     * 依次尝试：包名直启 → bdnetdisk:// scheme → 网页版兜底。
+     */
+    private void openPanApp() {
+        String via = "none";
+        try {
+            Intent i = getPackageManager().getLaunchIntentForPackage("com.baidu.netdisk");
+            if (i != null) {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                via = "app";
+            }
+        } catch (Exception ignored) {}
+        if ("none".equals(via)) {
+            for (String s : new String[]{"bdnetdisk://", "baiduyun://"}) {
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(s));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                    via = "scheme";
+                    break;
+                } catch (Exception ignored) {}
+            }
+        }
+        if ("none".equals(via)) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://pan.baidu.com"));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                via = "web";
+            } catch (Exception ignored) {}
+        }
+        js("window.Native.onPanApp(" + JSONObject.quote(via) + ")");
     }
 
     private void handleAudio(Uri uri) {
@@ -805,6 +891,25 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void pickAudio() { runOnUiThread(new Runnable() {
             @Override public void run() { MainActivity.this.pickAudio(); }
         }); }
+
+        /** 唤起百度网盘 App，让用户在网盘里选音频并分享过来 */
+        @JavascriptInterface public void openPanApp() { runOnUiThread(new Runnable() {
+            @Override public void run() { MainActivity.this.openPanApp(); }
+        }); }
+
+        /** 用系统浏览器打开（OAuth 授权页在 WebView 里体验差且没有登录态） */
+        @JavascriptInterface public void openUrl(final String url) {
+            if (url == null || url.isEmpty()) return;
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    } catch (Exception e) {
+                        js("window.Native.onError('打不开浏览器')");
+                    }
+                }
+            });
+        }
 
         @JavascriptInterface public String httpGet(String url) {
             java.net.HttpURLConnection c = null;

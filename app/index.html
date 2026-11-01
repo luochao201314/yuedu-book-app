@@ -1189,6 +1189,7 @@ window.SEED_BOOKS = [
     onError: null,
     onAutoStop: null,
     onResume: null,
+    onPanApp: null,
   };
   let photoBuf = {};
   let photoTotal = 0;
@@ -1239,7 +1240,21 @@ window.SEED_BOOKS = [
     onAudio(json) {
       let obj = null;
       try { obj = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { obj = null; }
+      if (obj && obj.error) { toast(obj.error); return; }
       if (Native.onAudio) Native.onAudio(obj);
+      else if (obj && obj.b64) {
+        // 用户从别的 App 分享音频进来（百度网盘长按→分享→悦读绘本），没有待处理的 picker 回调
+        try {
+          const bytes = new Uint8Array(b64ToBuf(obj.b64));
+          const blob = new Blob([bytes], { type: obj.mime || 'audio/mpeg' });
+          if (APP.ui && APP.ui.openAudioFromShare) {
+            APP.ui.openAudioFromShare({ blob: blob, name: obj.name || '网盘音频' });
+          }
+        } catch (e) {}
+      }
+    },
+    onPanApp(via) {
+      if (Native.onPanApp) Native.onPanApp(via);
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
@@ -1259,11 +1274,63 @@ window.SEED_BOOKS = [
     _audio: null,        // 云端音频播放元素
     _gen: 0,             // 代际令牌：用于打断“正在路上”的云端朗读
     _cloud: { ok: null, at: 0 }, // 云端可用性缓存，避免每次点击都白等
+    _cache: new Map(),   // 合成结果缓存：key → blob url（同一句第二次点直接秒播）
+    _cacheMax: 80,
+    _waitTip: 0,
+    _ckey(text, speed, isZh) {
+      return (isZh ? 'zh' : 'en') + '|' + speed + '|' + String(text).slice(0, 300);
+    },
+    _cachePut(key, b64) {
+      try {
+        const bin = b64ToBuf(b64);
+        const url = URL.createObjectURL(new Blob([new Uint8Array(bin)], { type: 'audio/mpeg' }));
+        // 超上限先淘汰最早的，并释放 objectURL，避免内存一直涨
+        if (this._cache.size >= this._cacheMax) {
+          const first = this._cache.keys().next().value;
+          const old = this._cache.get(first);
+          if (old) { try { URL.revokeObjectURL(old); } catch (e) {} }
+          this._cache.delete(first);
+        }
+        this._cache.set(key, url);
+        return url;
+      } catch (e) {
+        return null;
+      }
+    },
+    _playUrl(url) {
+      this._stopAudio();
+      const el = new Audio(url);
+      this._audio = el;
+      this.speaking = true;
+      const done = () => {
+        if (this._audio === el) { this._audio = null; this.speaking = false; }
+      };
+      el.addEventListener('ended', done);
+      el.addEventListener('error', done);
+      const p = el.play();
+      if (p && p.catch) {
+        p.catch(() => {
+          done();
+          // WebView 偶发拦截自动播放时，退回设备朗读，别让人以为坏了
+          if (this._lastText) this._native(this._lastText, this._lastSpeed || 1, {}, this._lastZh);
+        });
+      }
+    },
     speak(text, rate, opts) {
       const o = opts || {};
       const speed = Math.max(0.5, Math.min(1.4, rate || Store.settings().rate));
       const isZh = /[一-鿿]/.test(text);
+      this._lastSpeed = speed;
+      this._lastZh = isZh;
+      this._lastText = text;
       const token = ++this._gen; // 本次朗读的令牌
+      // 命中缓存 → 同步立刻播，零等待
+      const key = this._ckey(text, speed, isZh);
+      const hit = this._cache.get(key);
+      if (hit) {
+        this._playUrl(hit);
+        return true;
+      }
       // 优先云端神经网络朗读（更自然、不机械）；失败/未配置再退回设备原生 TTS
       this._speakCloud(text, speed, isZh, token).then((used) => {
         if (token === this._gen && !used) this._native(text, speed, o, isZh);
@@ -1271,17 +1338,33 @@ window.SEED_BOOKS = [
       return true;
     },
     async _speakCloud(text, speed, isZh, token) {
-      // 20s 内曾失败则跳过云端，避免反复白等（Render 冷启动常超时，窗口别太长）
-      if (this._cloud.ok === false && Date.now() - this._cloud.at < 20000) return false;
+      // 失败后 90 秒内跳过云端（Render 冷启动期间反复白等没意义），但不影响已缓存句子
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 90000) return false;
       try {
         const base = Api.base();
         if (!base) return false;
         const lang = isZh ? 'zh-CN' : 'en-US';
-        const r = await Api.req('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text, lang: lang, rate: Math.round(speed * 100) / 100 }),
-        }, 15000); // 冷启动可能要十几秒；超时再退回原生，不卡界面
+        // 冷启动乐观一点：从没成功过给 30s，成功过给 12s
+        const tmo = this._cloud.ok === true ? 12000 : 30000;
+        // 超过 1.5s 还没回来，提示一次，避免用户以为点了没反应
+        clearTimeout(this._waitTip);
+        this._waitTip = setTimeout(() => {
+          if (token === this._gen) toast('正在准备自然语音…', 1600);
+        }, 1500);
+        let r = null;
+        try {
+          r = await Api.req('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, lang: lang, rate: Math.round(speed * 100) / 100 }),
+          }, tmo);
+        } catch (e) {
+          // 超时多半是冷启动：先踢一下 /api/health 把实例叫醒，下次点击就能命中
+          if (e && e.code === 'timeout') Api.wake(true);
+          throw e;
+        } finally {
+          clearTimeout(this._waitTip);
+        }
         if (token !== this._gen) return false; // 已被新朗读/停止打断，丢弃
         if (!r || r.mock || !r.audio) {
           this._cloud = { ok: false, at: Date.now() };
@@ -1293,17 +1376,46 @@ window.SEED_BOOKS = [
           return false;
         }
         this._cloud.ok = true;
-        this._stopAudio();
-        const el = new Audio('data:audio/mpeg;base64,' + r.audio);
-        this._audio = el;
-        el.play().catch(() => {});
+        const key = this._ckey(text, speed, isZh);
+        const url = this._cachePut(key, r.audio);
+        if (!url) return false;
+        this._playUrl(url);
         return true;
       } catch (e) {
         this._cloud = { ok: false, at: Date.now() };
         return false;
       }
     },
+    /** 后台预取：进阅读页时把当前页句子先合成好，点领读就是秒出自然音 */
+    prefetch(texts, rate) {
+      const base = Api.base();
+      if (!base || !texts || !texts.length) return;
+      if (this._cloud.ok === false && Date.now() - this._cloud.at < 90000) return;
+      if (this._prefetching) return;
+      this._prefetching = true;
+      const queue = texts.slice(0, 12);
+      const step = () => {
+        const t = queue.shift();
+        if (!t) { this._prefetching = false; return; }
+        const isZh = /[一-鿿]/.test(t);
+        const speed = Math.max(0.5, Math.min(1.4, rate || 1));
+        const key = this._ckey(t, speed, isZh);
+        if (this._cache.has(key)) return step();
+        Api.req('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: t, lang: isZh ? 'zh-CN' : 'en-US', rate: Math.round(speed * 100) / 100 }),
+        }, 30000).then((r) => {
+          if (r && !r.mock && r.audio) {
+            this._cloud.ok = true;
+            this._cachePut(key, r.audio);
+          }
+        }).catch(() => {}).then(() => setTimeout(step, 120));
+      };
+      step();
+    },
     _stopAudio() {
+      this.speaking = false;
       if (this._audio) {
         try { this._audio.pause(); this._audio.currentTime = 0; } catch (e) {}
         this._audio = null;
@@ -2138,6 +2250,34 @@ window.SEED_BOOKS = [
     });
   }
 
+  /* ---------------- 唤起网盘 App / 系统浏览器 ---------------- */
+  function openPanApp() {
+    if (!Native.available()) {
+      window.open('https://pan.baidu.com', '_blank');
+      return false;
+    }
+    try {
+      Android.openPanApp();
+      return true;
+    } catch (e) {
+      toast('打不开百度网盘');
+      return false;
+    }
+  }
+
+  /** 外部链接优先交给系统浏览器（WebView 内没有登录态，授权页会反复要求登录） */
+  function openExternal(url) {
+    if (!url) return;
+    if (Native.available()) {
+      try {
+        Android.openUrl(url);
+        return;
+      } catch (e) {}
+    }
+    const w = window.open(url, '_blank');
+    if (!w) location.href = url;
+  }
+
   /* ---------------- 选择本地音频 ---------------- */
   function pickAudioFile() {
     return new Promise((resolve, reject) => {
@@ -2287,6 +2427,8 @@ window.SEED_BOOKS = [
   APP.pickPhotos = pickPhotos;
   APP.pickBookFile = pickBookFile;
   APP.pickAudioFile = pickAudioFile;
+  APP.openPanApp = openPanApp;
+  APP.openExternal = openExternal;
   APP.fileToB64 = fileToB64;
   APP.normalizeScore = normalizeScore;
   APP.books = { all: allBooks, byId: bookById, sentenceAt: sentenceAt, count: sentenceCount, progress: bookProgress };
@@ -2661,6 +2803,14 @@ window.SEED_BOOKS = [
 
     if (pr.pct >= 100) $('#readerBar').style.width = '100%';
     else $('#readerBar').style.width = pr.pct + '%';
+
+    // 后台预取当前页的自然语音：用户点「领读」时直接秒出，不用等合成
+    const firstPage = (b.pages || [])[0];
+    if (firstPage && firstPage.sentences) {
+      const rate = Store.settings().rate;
+      const texts = firstPage.sentences.filter((s) => !(s.a && b.audio)).map((s) => s.en);
+      if (texts.length) TTS.prefetch(texts, rate);
+    }
 
     $$('.sentence', list).forEach((card) => {
       const pi = Number(card.dataset.pi), si = Number(card.dataset.si);
@@ -3528,7 +3678,8 @@ window.SEED_BOOKS = [
     $('#sheetBody').innerHTML =
       '<h3>🎧 音频绘本</h3>' +
       '<div class="desc">有原版音频就用原声领读：先自动转成文稿，领读直接播这段录音，<b>跟读评分仍是原来的发音评测</b>。' +
-      '<br><span class="muted">支持百度网盘、音频直链、手机里的音频文件；单次建议 5 分钟以内（最长 8 分钟）。</span></div>' +
+      '<br><span class="muted">支持百度网盘、音频直链、手机里的音频文件；单次建议 5 分钟以内（最长 8 分钟）。' +
+      '<br>💡 网盘最快的用法：在百度网盘 App 里长按音频 → <b>分享 → 悦读绘本</b>，音频会直接送进来。</span></div>' +
       '<div class="chips" id="audioTabs" style="margin-bottom:10px">' +
       '<button class="chip on" data-tab="url">音频链接</button>' +
       '<button class="chip" data-tab="pan">百度网盘</button>' +
@@ -3565,6 +3716,23 @@ window.SEED_BOOKS = [
       $('#audioSave').disabled = !$('#audioText').value.trim();
     });
     $('#audioSave').onclick = saveAudioBook;
+  }
+
+  /** 从别的 App 分享音频进来：直接打开面板并预选，用户点一下「开始转写」即可 */
+  function openAudioFromShare(obj) {
+    if (!obj || !obj.blob) return;
+    const label = obj.name || '网盘音频';
+    try {
+      openAudio();
+      chooseAudio({ kind: 'blob', blob: obj.blob }, label);
+      const chip = $('#audioTabs .chip[data-tab="local"]');
+      if (chip) chip.click();
+      const st = $('#audioState');
+      if (st) st.textContent = '已收到：' + label + '（来自网盘分享），点「开始转写」';
+      toast('已收到音频：' + label);
+    } catch (e) {
+      toast('接收音频失败：' + (e.message || ''));
+    }
   }
 
   function chooseAudio(src, label) {
@@ -3625,23 +3793,52 @@ window.SEED_BOOKS = [
       $('#panState').textContent = '后端连接失败：' + (e.message || '网络错误');
       return;
     }
+    // 不管有没有配 AppKey，都先给「唤起网盘 App → 分享过来」这条路，它不需要任何配置
     if (!cfg || !cfg.baidu) {
       $('#panState').innerHTML =
-        '后端还没配置百度网盘应用，暂时用不了网盘。<br>可先用「音频链接」导入直链音频；' +
-        '要开网盘：去百度网盘开放平台建应用，把 AppKey / SecretKey 填到 Render 环境变量 ' +
-        '<b>BAIDU_PAN_APPKEY</b> / <b>BAIDU_PAN_SECRET</b>，回调地址填 <b>后端域名/api/pan/baidu/callback</b>。';
+        '<b>用百度网盘 App 直接送过来（推荐，不用配置）</b><br>' +
+        '点下面的按钮打开百度网盘 → 找到音频长按 → <b>分享</b> → 选「悦读绘本」→ 回来就能转写。<br>' +
+        '<span class="muted">想直接在 App 里浏览网盘目录，才需要在后端配 AppKey / SecretKey。</span>';
+      const b = document.createElement('button');
+      b.className = 'btn primary';
+      b.style.marginTop = '10px';
+      b.textContent = '📂 打开百度网盘';
+      b.onclick = () => openPanWithHint();
+      $('#panState').appendChild(b);
       return;
     }
     const state = String(Store.settings().panState || '');
     const sess = state ? await Api.panSession(state).catch(() => null) : null;
     if (sess && sess.ok) return panListDir(pane, state, '/');
-    $('#panState').innerHTML = '还没连接百度网盘。<br>';
+    $('#panState').innerHTML =
+      '还没连接百度网盘。可以直接在 App 里浏览网盘，也可以走「网盘 App → 分享 → 悦读绘本」更快。<br>';
     const btn = document.createElement('button');
     btn.className = 'btn primary';
     btn.style.marginTop = '10px';
     btn.textContent = '连接百度网盘';
     btn.onclick = () => connectPan(pane, btn);
     $('#panState').appendChild(btn);
+    const b2 = document.createElement('button');
+    b2.className = 'btn ghost';
+    b2.style.margin = '10px 0 0 8px';
+    b2.textContent = '📂 打开网盘 App';
+    b2.onclick = () => openPanWithHint();
+    $('#panState').appendChild(b2);
+  }
+
+  /** 唤起百度网盘客户端，并告诉用户接下来怎么把音频送进来 */
+  function openPanWithHint() {
+    if (!Native.available()) {
+      toast('网页版不支持唤起 App，请在手机上打开');
+      APP.openExternal('https://pan.baidu.com');
+      return;
+    }
+    Native.onPanApp = (via) => {
+      Native.onPanApp = null;
+      if (via === 'web') toast('没检测到百度网盘 App，已打开网页版');
+    };
+    APP.openPanApp();
+    toast('在网盘里长按音频 → 分享到「悦读绘本」');
   }
 
   async function connectPan(pane, btn) {
@@ -3651,12 +3848,9 @@ window.SEED_BOOKS = [
     if (!r || !r.url) return toast((r && r.note) || '获取授权地址失败');
     btn.disabled = true;
     btn.textContent = '等待授权…';
-    const w = window.open(r.url, '_blank');
-    if (!w) {
-      // 安卓 WebView 里没有多窗口，直接在本页跳转；回来后会按已保存的 state 自动接上
-      location.href = r.url;
-      return;
-    }
+    // 授权页交给系统浏览器：WebView 里没有百度登录态，会一直卡在登录页
+    // 手机上若已登录百度账号，浏览器里点一下就能授权；回来时下面的轮询会自动接上
+    APP.openExternal(r.url);
     let tries = 0;
     const timer = setInterval(async () => {
       tries++;
@@ -3881,6 +4075,7 @@ window.SEED_BOOKS = [
     openOCR: openOCR,
     openImport: openImport,
     openAudio: openAudio,
+    openAudioFromShare: openAudioFromShare,
     closeSheet: closeSheet,
     syncPublic: syncPublic,
     testApi: testApi,

@@ -1,11 +1,33 @@
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..").Path
-$sdk  = 'C:\Users\luoch\AppData\Local\Temp\opencode\android\sdk'
-$jdk  = 'C:\Users\luoch\AppData\Local\Temp\opencode\android\jdk'
-$bt   = "$sdk\build-tools\34.0.0"
-$aj   = "$sdk\platforms\android-34\android.jar"
+
+# ---- 工具链定位：优先环境变量，其次逐个探测已知安装位置 ----
+$toolHomes = @($env:ANDROID_BUILD_HOME, 'C:\Users\luoch\.android-build', 'C:\Users\luoch\AppData\Local\Temp\opencode\android')
+$jdk = $null; $bt = $null; $aj = $null
+foreach ($h in $toolHomes) {
+  if (!$h -or !(Test-Path $h)) { continue }
+  if (!$jdk) {
+    $c = Get-ChildItem $h -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'jdk*' } | Select-Object -First 1
+    if ($c -and (Test-Path "$($c.FullName)\bin\javac.exe")) { $jdk = $c.FullName }
+    elseif (Test-Path "$h\jdk\bin\javac.exe") { $jdk = "$h\jdk" }
+  }
+  if (!$bt) {
+    foreach ($d in @("$h\android-14", "$h\build-tools\34.0.0", "$h\sdk\build-tools\34.0.0")) {
+      if (Test-Path "$d\aapt2.exe") { $bt = $d; break }
+    }
+  }
+  if (!$aj) {
+    foreach ($d in @("$h\sdk\android-34\android.jar", "$h\platforms\android-34\android.jar")) {
+      if (Test-Path $d) { $aj = $d; break }
+    }
+  }
+}
+if (!(Test-Path env:JAVA_HOME) -or !$env:JAVA_HOME) { }
 $env:JAVA_HOME = $jdk
-$env:Path = "$jdk\bin;$env:Path"
+$env:Path = "$jdk\bin;$bt;$env:Path"
+Write-Host "JDK = $jdk"
+Write-Host "BT  = $bt"
+Write-Host "JAR = $aj"
 
 foreach ($p in @("$bt\aapt2.exe", "$bt\d8.bat", "$bt\zipalign.exe", "$bt\apksigner.bat", $aj, "$jdk\bin\javac.exe")) {
   if (!(Test-Path $p)) { throw "missing build tool: $p" }
@@ -37,7 +59,10 @@ try {
 Write-Host "[3/6] compile java"
 $srcs = @(Get-ChildItem "$app\java" -Recurse -Filter *.java | ForEach-Object { $_.FullName })
 $srcs += @(Get-ChildItem "$work\gen" -Recurse -Filter *.java | ForEach-Object { $_.FullName })
-& "$jdk\bin\javac.exe" -encoding UTF-8 -source 8 -target 8 -bootclasspath $aj -d "$work\classes" $srcs
+# android.jar 不含 java.lang.invoke.LambdaMetafactory，必须把 core-lambda-stubs 一起放进 bootclasspath，否则 lambda 编译报错
+$lam = "$bt\core-lambda-stubs.jar"
+$bcp = if (Test-Path $lam) { "$aj;$lam" } else { $aj }
+& "$jdk\bin\javac.exe" -encoding UTF-8 -source 8 -target 8 -bootclasspath $bcp -d "$work\classes" $srcs
 if ($LASTEXITCODE -ne 0) { throw "javac failed" }
 
 Write-Host "[4/6] dex"

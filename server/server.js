@@ -535,7 +535,7 @@ const server = http.createServer(async (req, res) => {
     const url = 'https://openapi.baidu.com/oauth/2.0/authorize?response_type=code' +
       '&client_id=' + encodeURIComponent(process.env.BAIDU_PAN_APPKEY) +
       '&redirect_uri=' + encodeURIComponent(redirect) +
-      '&scope=basic,netdisk&display=page&state=' + encodeURIComponent(state);
+      '&scope=basic,netdisk&display=mobile&state=' + encodeURIComponent(state);
     return send(res, 200, { url, redirect });
   }
 

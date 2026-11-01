@@ -1,14 +1,33 @@
 # 悦读绘本 · 安卓安装包（APK）构建与接入说明
 
-## 一、为什么是「云端打包」而不是本地直接出包？
+## 一、出包方式（两条，随便挑）
 
-本机（你的开发环境）**没有安装 Android SDK / Java / Gradle**，无法在本地编译真正的 `.apk` 二进制。为此我采用业界标准做法：
+| 方式 | 命令 | 耗时 | 说明 |
+|---|---|---|---|
+| **本地一键出包**（推荐） | `powershell -File tools\build-apk.ps1` | 约 20 秒 | 产物在 `release/yuedu-1.0.0.apk`，改完代码立刻拿到包 |
+| 云端 GitHub Actions | push 到 main | 约 3 分钟 | 在 Actions 页面下载 Artifacts |
 
-- **Web 前端**（`app/`）：一个自包含的 PWA，含领读(TTS)、跟读录音、评分纠错、拍照 OCR、成长记录，离线演示模式默认可用。
-- **Android 工程**（`android/`）：用 `WebView` + `WebViewAssetLoader` 把前端以 `https` 安全域加载进 App，使麦克风（跟读）可用；已申请 `RECORD_AUDIO` 权限。
-- **GitHub Actions 工作流**（`.github/workflows/build-apk.yml`）：在 GitHub 云端（自带 Android SDK）自动编译、**用 debug 签名产出可直接安装的 release APK**。
+本地出包不需要装 Android Studio / Gradle，只要一份**便携工具链**：
 
-> 你只需 push 到 GitHub 跑一次流水线，去 Actions 页面下载 APK 即可，本地**零安卓工具依赖**。
+```
+C:\Users\luoch\.android-build\
+├─ jdk-17.0.20.1+1\          # Temurin JDK 17
+├─ android-14\               # build-tools 34.0.0（aapt2 / d8 / zipalign / apksigner）
+└─ sdk\android-34\android.jar
+```
+
+`tools/build-apk.ps1` 会自动探测这个目录（也认 `$env:ANDROID_BUILD_HOME`），找不到才报错。
+脚本流程：`build-www.js` 生成单文件前端 → 拷进 assets → `aapt2 compile/link` → `javac`（bootclasspath 带 `core-lambda-stubs.jar`）→ `d8` → 塞 `classes.dex` → `zipalign` → `apksigner`（debug 自签名，可直接安装）。
+
+> 本工程是纯 WebView 壳、零第三方依赖，所以不用 Gradle / AGP 也能出包；`android/*.gradle` 只是给云端流水线或以后接 Android Studio 用的。
+
+---
+
+## 二、App 结构
+
+- **Web 前端**（`app/`）：自包含 PWA，含领读(TTS)、跟读录音、评分纠错、拍照 OCR、成长记录，离线演示模式默认可用。
+- **Android 工程**（`android/`）：`WebView` 加载 `assets/index.html`，通过 `@JavascriptInterface` 桥接系统能力（TTS / 录音 / 选文件 / 唤起网盘 / 系统浏览器）。
+- **GitHub Actions**（`.github/workflows/build-apk.yml`）：云端再出一份包，作为备份渠道。
 
 ---
 
@@ -25,7 +44,7 @@ node server.js            # 打开 http://localhost:3000
 
 ---
 
-## 三、生成真正的 `.apk`（一键云端出包）
+## 四、云端出包（备用渠道）
 
 ### 1. 把整个仓库推到 GitHub
 ```bash
@@ -46,7 +65,7 @@ gh repo create yuedu-book --private --source=. --push   # 或手动在 github.co
 
 ---
 
-## 四、APK 里的功能与「真实接口」开关
+## 五、APK 里的功能与「真实接口」开关
 
 | 功能 | APK 默认行为 | 启用真实接口 |
 |---|---|---|
@@ -60,7 +79,7 @@ gh repo create yuedu-book --private --source=. --push   # 或手动在 github.co
 
 ---
 
-## 五、申请密钥（需你本人操作，见 api-readme.md）
+## 六、申请密钥（需你本人操作，见 api-readme.md）
 - **Azure 发音评测 F0**：免费 5 音频小时/月，绑定信用卡不扣费。
 - **OCR.space 免费档**：邮箱注册，25,000 次/月，无需信用卡。
 - **Project Gutenberg**：公版资源，无需密钥。
@@ -69,7 +88,7 @@ gh repo create yuedu-book --private --source=. --push   # 或手动在 github.co
 
 ---
 
-## 六、目录结构
+## 七、目录结构
 ```
 app/                         # PWA 前端（也是 APK 内打包的资源）
   index.html  manifest.webmanifest  sw.js  icons/
@@ -82,7 +101,7 @@ server/                      # 后端代理（Azure/OCR.space 密钥在此）
 docs/android-build.md  docs/api-readme.md  docs/free-apis.html
 ```
 
-## 七、已知约束
+## 八、已知约束
 - 本机无 Android SDK，APK 由云端构建；我无法在此预览真机安装效果，但工程与流水线均为标准配置。
 - 跟读麦克风依赖 `https` 安全上下文，`WebViewAssetLoader` 已满足；若部分老旧 WebView 内核不支持 `getUserMedia`，可改用端侧原生录音桥接（后续迭代）。
 - 牛津树/红火箭/神奇校车受版权保护，示例数据仅演示；正式上线请用公版或用户拍照录入自有书。
