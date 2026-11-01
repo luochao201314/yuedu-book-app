@@ -1285,6 +1285,11 @@ window.SEED_BOOKS = [
         if (token !== this._gen) return false; // 已被新朗读/停止打断，丢弃
         if (!r || r.mock || !r.audio) {
           this._cloud = { ok: false, at: Date.now() };
+          // 只提示一次，避免每次点领读都弹；让人知道为什么退回机械音
+          if (r && r.note && !this._noteShown) {
+            this._noteShown = true;
+            toast('云端朗读不可用，已改用设备朗读：' + r.note, 3200);
+          }
           return false;
         }
         this._cloud.ok = true;
