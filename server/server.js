@@ -63,7 +63,7 @@ const server = http.createServer(async (req, res) => {
       azure: !!process.env.AZURE_SPEECH_KEY,
       tts: !!process.env.AZURE_SPEECH_KEY,
       ocr: !!process.env.OCR_SPACE_KEY,
-      ver: 5
+      ver: 6
     });
   }
 
@@ -289,8 +289,23 @@ const server = http.createServer(async (req, res) => {
     const ttl = hit && !hit.data.ipa ? 5 * 60 * 1000 : 24 * 3600 * 1000;
     if (hit && Date.now() - hit.at < ttl) return send(res, 200, hit.data);
 
-    const ask = async () => {
-      const ir = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(w), {
+    // 主源：dictionaryapi.dev；备用源：freedictionaryapi.com
+    // 两个源在国内/共享出口 IP 下都会偶发 404 限流，所以各自重试一次，拿不到再换源
+    const withRetry = async (fn, times) => {
+      let lastErr = null;
+      for (let i = 0; i < times; i++) {
+        try {
+          return await fn();
+        } catch (e) {
+          lastErr = e;
+          if (i + 1 < times) await new Promise((r) => setTimeout(r, 320));
+        }
+      }
+      throw lastErr || new Error('upstream failed');
+    };
+
+    const getJson = async (url) => {
+      const ir = await fetch(url, {
         headers: { 'User-Agent': 'yuedu-book/1.0' },
         signal: AbortSignal.timeout(7000),
       });
@@ -302,33 +317,55 @@ const server = http.createServer(async (req, res) => {
       return ir.json();
     };
 
-    // dictionaryapi.dev 偶发 404（共享出口 IP 被限流），404 也重试一次再判定「查不到」
-    let j = null;
-    let lastErr = null;
-    for (let attempt = 0; attempt < 2 && !j; attempt++) {
+    const fromDictApi = () =>
+      withRetry(async () => {
+        const j = await getJson('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(w));
+        const e = Array.isArray(j) ? j[0] : null;
+        const list = (e && e.phonetics) || [];
+        let ipa = (e && e.phonetic) || '';
+        if (!ipa) {
+          const p = list.find((x) => x && x.text);
+          ipa = p ? p.text : '';
+        }
+        const audio = ((list.find((x) => x && x.audio) || {}).audio) || '';
+        if (!ipa) {
+          const nf = new Error('empty');
+          nf.status = 404;
+          throw nf;
+        }
+        return { word: w, ipa: ipa, audio: audio || '' };
+      }, 2);
+
+    const fromFreeApi = () =>
+      withRetry(async () => {
+        const j = await getJson('https://freedictionaryapi.com/api/v1/entries/en/' + encodeURIComponent(w));
+        const entries = (j && j.entries) || [];
+        for (const e of entries) {
+          const list = (e && e.pronunciations) || [];
+          const p = list.find((x) => x && x.type === 'ipa' && x.text);
+          if (p) return { word: w, ipa: p.text, audio: '' };
+        }
+        const nf = new Error('empty');
+        nf.status = 404;
+        throw nf;
+      }, 2);
+
+    let data = null;
+    let allNotFound = true;
+    for (const src of [fromDictApi, fromFreeApi]) {
       try {
-        j = await ask();
+        data = await src();
+        break;
       } catch (e) {
-        lastErr = e;
-        if (e.status === 404 && attempt === 0) await new Promise((r) => setTimeout(r, 350));
-        else break;
+        if (e.status !== 404) allNotFound = false;
       }
     }
-    if (j) {
-      const e = Array.isArray(j) ? j[0] : null;
-      const list = (e && e.phonetics) || [];
-      let ipa = (e && e.phonetic) || '';
-      if (!ipa) {
-        const p = list.find(x => x && x.text);
-        ipa = p ? p.text : '';
-      }
-      const audio = ((list.find(x => x && x.audio) || {}).audio) || '';
-      const data = { word: w, ipa: ipa || '', audio: audio || '' };
-      if (!data.ipa) data.note = 'not found';
+    if (data && data.ipa) {
       ipaCache.set(w, { at: Date.now(), data });
       return send(res, 200, data);
     }
-    if (lastErr && lastErr.status === 404) {
+    if (allNotFound) {
+      // 两个源都明确说没这个词：短缓存，避免一次抖动把词判死
       const miss = { word: w, ipa: '', note: 'not found' };
       ipaCache.set(w, { at: Date.now(), data: miss });
       return send(res, 200, miss);

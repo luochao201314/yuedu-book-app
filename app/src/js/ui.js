@@ -683,6 +683,7 @@
   }
 
   /* ================= 拍照录入（支持多张合并成一本） ================= */
+  const MAX_OCR_PAGES = 20;   // 与原生 MAX_PICK_IMAGES、PDF 导入上限保持一致
   let ocrImgs = [];        // 已选图片 base64
   let ocrPages = [];       // 每张图识别出的文字（按页）
   let ocrEdited = false;   // 用户是否手改过文本框
@@ -694,8 +695,8 @@
     const body = $('#sheetBody');
     body.innerHTML =
       '<h3>📷 拍照录入绘本</h3>' +
-      '<div class="desc">可以一次拍/选多页，识别后合成同一本绘本，再起个名字。图片只在本机与你的后端之间传输，不会保存。' +
-      '<br><span class="muted">照片里的页码、页眉页脚会自动过滤。</span></div>' +
+      '<div class="desc">可以一次拍/选多页，也能分几次追加，识别后合成同一本绘本，再起个名字。图片只在本机与你的后端之间传输，不会保存。' +
+      '<br><span class="muted">单本最多 ' + MAX_OCR_PAGES + ' 页；照片里的页码、页眉页脚会自动过滤。</span></div>' +
       '<div class="sheet-actions" style="margin-bottom:8px">' +
       '<button class="btn ghost" id="btnCamera">📷 拍一页</button>' +
       '<button class="btn ghost" id="btnGallery">🖼 相册多选</button>' +
@@ -740,15 +741,19 @@
       const n = ocrImgs.length;
       $('#ocrRun').disabled = !n;
       $('#ocrRun').textContent = n ? '开始识别（' + n + ' 页）' : '开始识别';
-      if (!n) $('#ocrState').textContent = '还没有图片，先拍一页或从相册多选';
-      else if (!ocrPages.length) $('#ocrState').textContent = '已选 ' + n + ' 页，点『开始识别』';
+      if (!n) $('#ocrState').textContent = '还没有图片，先拍一页或从相册多选（可多次追加）';
+      else if (!ocrPages.length) $('#ocrState').textContent = '已选 ' + n + '/' + MAX_OCR_PAGES + ' 页，可以继续追加，或点『开始识别』';
       else $('#ocrState').textContent = '已识别 ' + n + ' 页，可修改文字后保存';
     };
 
     const addImgs = (arr) => {
+      let dropped = 0;
       arr.forEach((b64) => {
-        if (b64 && ocrImgs.length < 8) ocrImgs.push(b64);
+        if (!b64) return;
+        if (ocrImgs.length < MAX_OCR_PAGES) ocrImgs.push(b64);
+        else dropped++;
       });
+      if (dropped) toast('一本最多 ' + MAX_OCR_PAGES + ' 页，已忽略多出的 ' + dropped + ' 张');
       ocrPages = [];
       drawThumbs();
     };
@@ -763,10 +768,16 @@
     };
     $('#btnGallery').onclick = async () => {
       try {
-        toast('可一次选多张');
+        // 20 张要解码十几秒，把进度打到面板上，别让人以为卡死
+        APP.Native.onPhotoProgress = (got, total) => {
+          $('#ocrState').textContent = '正在读取照片 ' + got + '/' + total + '…';
+        };
         const arr = await APP.pickPhotos();
+        APP.Native.onPhotoProgress = null;
         if (arr && arr.length) addImgs(arr);
+        else updateOcrState();
       } catch (e) {
+        APP.Native.onPhotoProgress = null;
         toast('打开相册失败');
       }
     };

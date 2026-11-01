@@ -121,7 +121,7 @@ input{font-family:inherit}
 .fab.ghost{background:#fff;color:var(--ink);box-shadow:0 8px 20px rgba(28,42,66,.16)}
 
 /* 批量识别缩略图 */
-.thumb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.thumb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;max-height:300px;overflow-y:auto;padding-right:2px}
 .thumb{position:relative;padding-top:100%;border-radius:12px;overflow:hidden;background:#EEF2F8;border:1px solid var(--line)}
 .thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .thumb-x{position:absolute;top:2px;right:2px;width:22px;height:22px;border-radius:50%;background:rgba(18,26,40,.62);color:#fff;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center}

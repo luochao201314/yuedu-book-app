@@ -57,7 +57,7 @@ public class MainActivity extends Activity {
     private static final int REQ_GALLERY = 103;
     private static final int REQ_GALLERY_MULTI = 104;
     private static final int REQ_FILE = 105;
-    private static final int MAX_PICK_IMAGES = 8;
+    private static final int MAX_PICK_IMAGES = 20;
     private static final int MAX_BOOK_BYTES = 12 * 1024 * 1024;
     private static final int SAMPLE_RATE = 16000;
 
@@ -410,23 +410,43 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void handleMultiImages(Intent data) {
-        List<String> list = new ArrayList<>();
+    private void handleMultiImages(final Intent data) {
+        final List<Uri> uris = new ArrayList<>();
         try {
             ClipData clip = data.getClipData();
             int n = clip == null ? (data.getData() != null ? 1 : 0) : clip.getItemCount();
             for (int k = 0; k < n && k < MAX_PICK_IMAGES; k++) {
                 Uri u = clip == null ? data.getData() : clip.getItemAt(k).getUri();
-                Bitmap bmp = decode(u, 1280);
-                if (bmp == null) continue;
-                ByteArrayOutputStream bo = new ByteArrayOutputStream();
-                bmp.compress(Bitmap.CompressFormat.JPEG, 80, bo);
-                bmp.recycle();
-                list.add(Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP));
+                if (u != null) uris.add(u);
             }
         } catch (Exception ignored) {
-        } catch (OutOfMemoryError ignored) {}
-        sendPhotos(list);
+        }
+        if (uris.isEmpty()) {
+            js("window.Native.onPhotos('[]')");
+            return;
+        }
+        final int total = uris.size();
+        // 解码/压缩放后台线程：20 页在 UI 线程跑会 ANR，而且一张一张回传更稳
+        new Thread(new Runnable() {
+            @Override public void run() {
+                for (int i = 0; i < total; i++) {
+                    String b64 = "";
+                    try {
+                        Bitmap bmp = decode(uris.get(i), 1280);
+                        if (bmp != null) {
+                            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 80, bo);
+                            bmp.recycle();
+                            b64 = Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
+                        }
+                    } catch (Exception ignored) {
+                    } catch (OutOfMemoryError ignored) {}
+                    // 解码失败的也要回传（空图），否则前端永远等不齐 n 张
+                    String json = "{\"i\":" + i + ",\"n\":" + total + ",\"b\":\"" + b64 + "\"}";
+                    js("window.Native.onPhotoItem('" + json + "')");
+                }
+            }
+        }).start();
     }
 
     /* ------------------------- 导入本地书籍 ------------------------- */

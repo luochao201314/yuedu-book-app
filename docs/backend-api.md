@@ -115,7 +115,8 @@ App 把这个接口当作「叫醒」探针：启动、从后台切回前台（�
 ```json
 { "word": "water", "ipa": "", "note": "upstream" }
 ```
-- 数据源 `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`，免费、无密钥；命中结果内存缓存 24h，`not found` 只缓存 5 分钟（共享出口 IP 偶尔被限流会假 404，所以 404 会先重试一次再判定），上游超时（7s）不缓存，下次点还能再试。
+- 两个免费源轮换：主源 `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`（有 `audio` 真人发音），备源 `https://freedictionaryapi.com/api/v1/entries/en/<word>`（取 `entries[].pronunciations[]` 里 `type=ipa` 的文本）。两边都会偶发 404 限流，所以每个源重试一次，主源拿不到再问备源。
+- 命中结果内存缓存 24h；`not found` 只缓存 5 分钟（避免一次抖动把词判死）；上游超时（7s）/非 200 不缓存，返回 `note: "upstream"`，前端显示「音标暂缺」，下次点这个词还能再试。
 - `audio` 是真人发音 mp3 直链，App 目前不用（点词走自己的 TTS），留着备用。
 - App 端 `yq.ipa.v1` 也会缓存到本机（最多 500 词），第二次点同一个词 0 秒出音标；拿不到就显示「音标暂缺」。
 
