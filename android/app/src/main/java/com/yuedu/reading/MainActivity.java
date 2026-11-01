@@ -530,7 +530,7 @@ public class MainActivity extends Activity {
                 "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/wav",
                 "audio/x-wav", "audio/ogg", "audio/flac", "application/octet-stream"
             });
-            startActivityForResult(Intent.createChooser(i, "选择音频（mp3 / m4a / wav，12MB 以内）"), REQ_AUDIO);
+            startActivityForResult(Intent.createChooser(i, "选择音频（mp3 / m4a / wav，12MB 以内）"), REQ_AUDIO_CLIP);
         } catch (Exception e) {
             js("window.Native.onAudio('{}')");
         }
