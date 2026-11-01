@@ -434,6 +434,9 @@
       if (!photoBuf[o.i]) {
         photoBuf[o.i] = o.b;
         photoGot++;
+        if (Native.onPhotoProgress) {
+          try { Native.onPhotoProgress(photoGot, photoTotal); } catch (e) {}
+        }
       }
       if (photoGot >= photoTotal) {
         const arr = [];
@@ -942,7 +945,10 @@
   function pickPhotos() {
     return new Promise((resolve, reject) => {
       if (Native.available()) {
-        Native.onPhotos = (arr) => resolve(Array.isArray(arr) ? arr : []);
+        Native.onPhotos = (arr) => {
+          Native.onPhotoProgress = null;
+          resolve(Array.isArray(arr) ? arr : []);
+        };
         try {
           Android.pickImages();
         } catch (e) {
@@ -955,7 +961,7 @@
       input.removeAttribute('capture');
       input.setAttribute('multiple', 'multiple');
       input.onchange = async () => {
-        const files = Array.from(input.files || []).slice(0, 8);
+        const files = Array.from(input.files || []).slice(0, 20);
         input.removeAttribute('multiple');
         if (!files.length) return resolve([]);
         try {
