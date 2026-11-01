@@ -302,6 +302,21 @@
     $('#readerBar').style.width = Math.min(100, pr.pct) + '%';
   }
 
+  /** 播放某一句话对应的原声片段（音频绘本）；取不到音频时退回合成朗读 */
+  async function playSentence(b, s, rate) {
+    let src = b._src;
+    if (!src) {
+      src = await APP.AudioBook.srcOf(b);
+      if (!src) {
+        toast('原声读取失败，先用合成朗读');
+        TTS.speak(s.en, Store.settings().rate);
+        return;
+      }
+      b._src = src;
+    }
+    if (!TTS.playClip(src, s.a[0], s.a[1], rate)) TTS.speak(s.en, Store.settings().rate);
+  }
+
   function renderReader() {
     const b = state.book;
     if (!b) return;
@@ -311,7 +326,7 @@
       b._loaded = true;
     }
     $('#readerName').textContent = b.title;
-    $('#readerMeta').textContent = [b.titleEn, b.series, b.level].filter(Boolean).join(' · ');
+    $('#readerMeta').textContent = [b.titleEn, b.series, b.level].filter(Boolean).join(' · ') + (b.audio ? ' · 🎧 原声' : '');
     $('#readerZh').style.opacity = state.zh ? 1 : 0.45;
     $('#readerZh').textContent = state.zh ? '中' : '中';
     $('#readerDel').hidden = b.source !== 'mine';
@@ -366,8 +381,10 @@
         const act = btn.dataset.act;
         const s = Books.sentenceAt(b, pi, si);
         if (!s) return;
-        if (act === 'lead') TTS.speak(s.en, Store.settings().rate);
-        if (act === 'slow') TTS.speak(s.en, 0.62);
+        if (act === 'lead' || act === 'slow') {
+          if (s.a && b.audio) playSentence(b, s, act === 'slow' ? 0.75 : 1);
+          else TTS.speak(s.en, act === 'slow' ? 0.62 : Store.settings().rate);
+        }
         if (act === 'follow') startFollow(card, s.en, key);
       });
     });
@@ -671,7 +688,11 @@
       el.className = 'status ok';
       el.textContent = '已连接';
       note.className = 'note';
-      note.textContent = '服务存活 · 语音评测' + (h.azure ? '已配置' : '未配置') + ' · OCR' + (h.ocr ? '已配置' : '未配置') + '（健康检查不等于评分可用，跟读时以实际结果为准）';
+      note.textContent = '服务存活 · 语音评测' + (h.azure ? '已配置' : '未配置') +
+        ' · 音频转写' + (h.asr ? '可用' : '不可用') +
+        ' · 网盘' + (h.pan ? '已配置' : '未配置') +
+        ' · OCR' + (h.ocr ? '已配置' : '未配置') +
+        '（健康检查不等于评分可用，跟读时以实际结果为准）';
     } catch (e) {
       APP.health = null;
       el.className = 'status bad';
@@ -1193,6 +1214,326 @@
     renderLibrary();
   }
 
+  /* ================= 音频绘本（音频 → 文稿 → 原声领读） ================= */
+  let pickedAudio = null;   // { kind:'url'|'blob', url, blob, name }
+  let audioSents = null;    // [{ en, a:[start,end] }]
+  let audioRunning = false;
+
+  function fmtSec(s) {
+    const n = Math.max(0, Math.round(Number(s) || 0));
+    return Math.floor(n / 60) + ':' + String(n % 60).padStart(2, '0');
+  }
+
+  function openAudio() {
+    pickedAudio = null;
+    audioSents = null;
+    audioRunning = false;
+    $('#sheetBody').innerHTML =
+      '<h3>🎧 音频绘本</h3>' +
+      '<div class="desc">有原版音频就用原声领读：先自动转成文稿，领读直接播这段录音，<b>跟读评分仍是原来的发音评测</b>。' +
+      '<br><span class="muted">支持百度网盘、音频直链、手机里的音频文件；单次建议 5 分钟以内（最长 8 分钟）。</span></div>' +
+      '<div class="chips" id="audioTabs" style="margin-bottom:10px">' +
+      '<button class="chip on" data-tab="url">音频链接</button>' +
+      '<button class="chip" data-tab="pan">百度网盘</button>' +
+      '<button class="chip" data-tab="local">本地文件</button>' +
+      '</div>' +
+      '<div id="audioPane" style="margin-bottom:6px"></div>' +
+      '<label class="field" style="border:none"><span>书名</span><input id="audioTitle" class="input" style="text-align:left" placeholder="给这本书起个名字" /></label>' +
+      '<div style="height:4px;background:#e7edf6;border-radius:3px;overflow:hidden;margin:6px 0 8px">' +
+      '<i id="audioProg" style="display:block;height:100%;width:0;background:#5b8def;transition:width .25s"></i></div>' +
+      '<div class="muted" id="audioState" style="margin:0 0 8px">还没有选择音频</div>' +
+      '<textarea id="audioText" class="ocr-text" style="display:none" placeholder="转写结果会出现在这里"></textarea>' +
+      '<div class="muted" id="audioTip" style="display:none;margin:-4px 0 8px">改过的句子会改回合成朗读（因为没有对应原声时间点）。</div>' +
+      '<div class="sheet-actions">' +
+      '<button class="btn ghost" id="audioCancel">取消</button>' +
+      '<button class="btn primary" id="audioRun" disabled>开始转写</button>' +
+      '<button class="btn primary" id="audioSave" style="display:none">存成一本绘本</button>' +
+      '</div>';
+    $('#sheetMask').classList.add('show');
+    $('#audioTitle').value = defaultMineTitle();
+    $('#audioCancel').onclick = closeSheet;
+
+    const pane = $('#audioPane');
+    const setTab = (tab) => {
+      $$('#audioTabs .chip').forEach((c) => c.classList.toggle('on', c.dataset.tab === tab));
+      if (tab === 'url') renderUrlPane(pane);
+      else if (tab === 'pan') renderPanPane(pane);
+      else renderLocalPane(pane);
+    };
+    $$('#audioTabs .chip').forEach((c) => (c.onclick = () => setTab(c.dataset.tab)));
+    setTab('url');
+
+    $('#audioRun').onclick = runTranscribe;
+    $('#audioText').addEventListener('input', () => {
+      $('#audioSave').disabled = !$('#audioText').value.trim();
+    });
+    $('#audioSave').onclick = saveAudioBook;
+  }
+
+  function chooseAudio(src, label) {
+    pickedAudio = src;
+    const st = $('#audioState');
+    if (st) st.textContent = '已选择：' + label + '，点「开始转写」';
+    const run = $('#audioRun');
+    if (run) run.disabled = false;
+    const t = $('#audioTitle');
+    if (t && !t.value.trim()) t.value = titleFromFile(label);
+  }
+
+  function renderUrlPane(pane) {
+    pane.innerHTML =
+      '<label class="field" style="border:none;padding-top:0"><span>音频地址</span>' +
+      '<input id="audioUrl" class="input" style="text-align:left" placeholder="https://… .mp3" /></label>' +
+      '<div class="muted" style="margin:-4px 0 8px">贴 mp3 / m4a / wav 直链即可；网盘分享页需要先在网盘里拿到直链，或改用「百度网盘」页。</div>' +
+      '<div class="sheet-actions" style="margin-top:0">' +
+      '<button class="btn ghost" id="audioTry">试听 10 秒</button>' +
+      '<button class="btn ghost" id="audioUseUrl">用这个链接</button>' +
+      '</div>';
+    $('#audioUseUrl').onclick = () => {
+      const v = ($('#audioUrl').value || '').trim();
+      if (!/^https?:\/\//i.test(v)) return toast('请填写 http/https 开头的音频地址');
+      chooseAudio({ kind: 'url', url: v }, v.split('/').pop().split('?')[0] || '音频');
+    };
+    $('#audioTry').onclick = async () => {
+      const v = ($('#audioUrl').value || '').trim();
+      if (!v) return toast('先填音频地址');
+      const base = Api.base();
+      const src = v.indexOf(base) === 0 ? v : base + '/api/audio/proxy?url=' + encodeURIComponent(v);
+      TTS.playClip(src, 0, 10, 1);
+      toast('试听中（10 秒）');
+    };
+  }
+
+  function renderLocalPane(pane) {
+    pane.innerHTML =
+      '<div class="muted" style="margin:0 0 8px">从手机里选音频（mp3 / m4a / wav / aac），会存进 App 本地，离线也能听。</div>' +
+      '<div class="sheet-actions" style="margin-top:0"><button class="btn ghost" id="audioPick">📂 选择音频文件</button></div>';
+    $('#audioPick').onclick = async () => {
+      try {
+        const f = await APP.pickAudioFile();
+        if (!f) return;
+        chooseAudio({ kind: 'blob', blob: f.blob }, f.name || '本地音频');
+      } catch (e) {
+        toast(e.message || '打开文件失败');
+      }
+    };
+  }
+
+  async function renderPanPane(pane) {
+    pane.innerHTML = '<div class="muted" id="panState">正在检查网盘配置…</div><div id="panList"></div>';
+    let cfg = null;
+    try {
+      cfg = await Api.panConfig();
+    } catch (e) {
+      $('#panState').textContent = '后端连接失败：' + (e.message || '网络错误');
+      return;
+    }
+    if (!cfg || !cfg.baidu) {
+      $('#panState').innerHTML =
+        '后端还没配置百度网盘应用，暂时用不了网盘。<br>可先用「音频链接」导入直链音频；' +
+        '要开网盘：去百度网盘开放平台建应用，把 AppKey / SecretKey 填到 Render 环境变量 ' +
+        '<b>BAIDU_PAN_APPKEY</b> / <b>BAIDU_PAN_SECRET</b>，回调地址填 <b>后端域名/api/pan/baidu/callback</b>。';
+      return;
+    }
+    const state = String(Store.settings().panState || '');
+    const sess = state ? await Api.panSession(state).catch(() => null) : null;
+    if (sess && sess.ok) return panListDir(pane, state, '/');
+    $('#panState').innerHTML = '还没连接百度网盘。<br>';
+    const btn = document.createElement('button');
+    btn.className = 'btn primary';
+    btn.style.marginTop = '10px';
+    btn.textContent = '连接百度网盘';
+    btn.onclick = () => connectPan(pane, btn);
+    $('#panState').appendChild(btn);
+  }
+
+  async function connectPan(pane, btn) {
+    const state = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    Store.saveSettings({ panState: state });
+    const r = await Api.panAuth(state).catch(() => null);
+    if (!r || !r.url) return toast((r && r.note) || '获取授权地址失败');
+    btn.disabled = true;
+    btn.textContent = '等待授权…';
+    const w = window.open(r.url, '_blank');
+    if (!w) {
+      // 安卓 WebView 里没有多窗口，直接在本页跳转；回来后会按已保存的 state 自动接上
+      location.href = r.url;
+      return;
+    }
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries++;
+      const s = await Api.panSession(state).catch(() => null);
+      if (s && s.ok) {
+        clearInterval(timer);
+        panListDir(pane, state, '/');
+      } else if (tries > 90) {
+        clearInterval(timer);
+        btn.disabled = false;
+        btn.textContent = '连接百度网盘';
+        toast('授权超时，再试一次');
+      }
+    }, 2000);
+  }
+
+  async function panListDir(pane, state, dir) {
+    const st = $('#panState');
+    const list = $('#panList');
+    if (st) st.textContent = '正在读取 ' + dir + ' …';
+    if (list) list.innerHTML = '';
+    let r = null;
+    try {
+      r = await Api.panList(state, dir);
+    } catch (e) {
+      if (st) {
+        const msg = e.status === 401 ? '网盘授权已失效（后端重启后需要重新授权），请重新连接' : e.message || '网络错误';
+        st.innerHTML = '读取失败：' + esc(msg) + '<br>';
+        const b = document.createElement('button');
+        b.className = 'btn ghost';
+        b.style.marginTop = '8px';
+        b.textContent = '重新连接网盘';
+        b.onclick = () => {
+          Store.saveSettings({ panState: '' });
+          renderPanPane(pane);
+        };
+        st.appendChild(b);
+      }
+      return;
+    }
+    const items = (r && r.items) || [];
+    if (st) st.textContent = dir === '/' ? '网盘根目录' : '目录：' + dir;
+    if (!items.length) {
+      list.innerHTML = '<div class="muted">这个文件夹是空的</div>';
+      return;
+    }
+    // 文件夹在前，音频其次，其它置灰
+    items.sort((a, b) => (b.isdir - a.isdir) || (b.audio - a.audio) || a.name.localeCompare(b.name));
+    list.innerHTML = items
+      .slice(0, 200)
+      .map((it, i) => {
+        const icon = it.isdir ? '📁' : it.audio ? '🎵' : '📄';
+        const size = it.isdir ? '' : it.size ? (it.size / 1048576).toFixed(1) + ' MB' : '';
+        const dim = !it.isdir && !it.audio;
+        return (
+          '<div class="pan-row" data-i="' + i + '" style="display:flex;align-items:center;gap:8px;padding:10px 2px;border-bottom:1px solid var(--line);' +
+          (dim ? 'opacity:.42' : '') + '">' +
+          '<span style="font-size:16px">' + icon + '</span>' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600">' + esc(it.name) + '</span>' +
+          '<span class="muted" style="flex:none">' + size + '</span>' +
+          '</div>'
+        );
+      })
+      .join('');
+    $$('#panList .pan-row').forEach((row) => {
+      const it = items[Number(row.dataset.i)];
+      if (!it) return;
+      if (it.isdir) {
+        row.onclick = () => panListDir(pane, state, it.path);
+        return;
+      }
+      if (!it.audio) return;
+      row.onclick = () => {
+        const url = Api.panStreamUrl(state, it.fs_id);
+        TTS.playClip(url, 0, 8, 1);
+        chooseAudio({ kind: 'url', url: url }, it.name);
+        toast('正在试听 ' + it.name);
+      };
+    });
+    if (dir !== '/') {
+      const back = document.createElement('button');
+      back.className = 'btn ghost';
+      back.style.marginTop = '10px';
+      back.textContent = '← 返回上一级';
+      back.onclick = () => {
+        const up = dir.replace(/\/[^/]+\/?$/, '') || '/';
+        panListDir(pane, state, up || '/');
+      };
+      list.appendChild(back);
+    }
+  }
+
+  async function runTranscribe() {
+    if (audioRunning) return;
+    if (!pickedAudio) return toast('先选一个音频');
+    audioRunning = true;
+    const run = $('#audioRun');
+    const save = $('#audioSave');
+    const st = $('#audioState');
+    const prog = $('#audioProg');
+    run.disabled = true;
+    run.textContent = '转写中…';
+    try {
+      const r = await APP.AudioBook.transcribe(pickedAudio, (p, msg) => {
+        if (st) st.textContent = msg;
+        if (prog) prog.style.width = Math.round(Math.max(0, Math.min(1, p)) * 100) + '%';
+      });
+      audioSents = r.sentences;
+      const ta = $('#audioText');
+      ta.style.display = 'block';
+      ta.value = r.sentences.map((s) => s.en).join('\n');
+      $('#audioTip').style.display = 'block';
+      if (st) st.textContent = '转写完成：' + r.sentences.length + ' 句，共 ' + fmtSec(r.duration) + '。可以改文字后保存。';
+      run.style.display = 'none';
+      save.style.display = 'block';
+      save.disabled = false;
+      if (prog) prog.style.width = '100%';
+    } catch (e) {
+      if (st) st.textContent = '转写失败：' + (e.message || '未知错误');
+      toast(e.message || '转写失败');
+      run.disabled = false;
+      run.textContent = '开始转写';
+    } finally {
+      audioRunning = false;
+    }
+  }
+
+  async function saveAudioBook() {
+    const ta = $('#audioText');
+    const lines = String(ta.value || '')
+      .split('\n')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (!lines.length) return toast('还没有文稿');
+    const sentences = lines.slice(0, 300).map((en, i) => {
+      const src = audioSents && audioSents[i];
+      const s = { en: en, zh: '' };
+      if (src && src.a && src.en === en) s.a = src.a;
+      return s;
+    });
+    const title = ($('#audioTitle').value || '').trim() || defaultMineTitle();
+    const book = {
+      id: 'mine-' + Date.now(),
+      title: title,
+      titleEn: '',
+      series: '音频绘本',
+      level: '我的',
+      source: 'mine',
+      color: '#5E8CA8',
+      emoji: '🎧',
+      pages: [{ sentences: sentences }],
+      audio: null,
+    };
+    loading(true, '正在保存音频…');
+    try {
+      if (pickedAudio && pickedAudio.kind === 'blob') {
+        book.audio = await APP.AudioBook.saveLocal('audio:' + book.id, pickedAudio.blob);
+      } else if (pickedAudio && pickedAudio.kind === 'url') {
+        book.audio = { kind: 'url', url: pickedAudio.url };
+      }
+      if (!book.audio) throw new Error('没有音频可保存');
+    } catch (e) {
+      loading(false);
+      return toast('音频保存失败：' + (e.message || '本机存储空间可能不足'));
+    }
+    loading(false);
+    Store.addMine(book);
+    closeSheet();
+    const withAudio = sentences.filter((s) => s.a).length;
+    toast('已存成《' + title + '》，' + sentences.length + ' 句（' + withAudio + ' 句有原声）');
+    APP.go('library');
+    renderLibrary();
+  }
+
   /* ================= 同步公版 ================= */
   async function syncPublic() {
     if (APP.syncing) return;
@@ -1242,6 +1583,7 @@
     renderMe: renderMe,
     openOCR: openOCR,
     openImport: openImport,
+    openAudio: openAudio,
     closeSheet: closeSheet,
     syncPublic: syncPublic,
     testApi: testApi,

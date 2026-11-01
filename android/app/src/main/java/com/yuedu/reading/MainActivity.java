@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
     private static final int REQ_GALLERY = 103;
     private static final int REQ_GALLERY_MULTI = 104;
     private static final int REQ_FILE = 105;
+    private static final int REQ_AUDIO = 106;
     private static final int MAX_PICK_IMAGES = 20;
     private static final int MAX_BOOK_BYTES = 12 * 1024 * 1024;
     private static final int SAMPLE_RATE = 16000;
@@ -360,6 +361,11 @@ public class MainActivity extends Activity {
             else js("window.Native.onBookFile('{}')");
             return;
         }
+        if (req == REQ_AUDIO) {
+            if (res == RESULT_OK && data != null && data.getData() != null) handleAudio(data.getData());
+            else js("window.Native.onAudio('{}')");
+            return;
+        }
         Uri uri = null;
         if (req == REQ_CAMERA) {
             uri = cameraUri;
@@ -463,6 +469,62 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             js("window.Native.onBookFile(" + JSONObject.quote("{\"error\":\"无法打开文件选择器\"}") + ")");
         }
+    }
+
+    /* ------------------------- 导入本地音频（音频绘本） ------------------------- */
+    private static final int MAX_AUDIO_BYTES = 12 * 1024 * 1024;
+
+    private void pickAudio() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("audio/*");
+            i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/wav",
+                "audio/x-wav", "audio/ogg", "audio/flac", "application/octet-stream"
+            });
+            startActivityForResult(Intent.createChooser(i, "选择音频（mp3 / m4a / wav，12MB 以内）"), REQ_AUDIO);
+        } catch (Exception e) {
+            js("window.Native.onAudio('{}')");
+        }
+    }
+
+    private String guessAudioMime(String name) {
+        String n = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        if (n.endsWith(".wav")) return "audio/wav";
+        if (n.endsWith(".m4a")) return "audio/x-m4a";
+        if (n.endsWith(".aac")) return "audio/aac";
+        if (n.endsWith(".ogg") || n.endsWith(".opus")) return "audio/ogg";
+        if (n.endsWith(".flac")) return "audio/flac";
+        if (n.endsWith(".mp4")) return "audio/mp4";
+        return "audio/mpeg";
+    }
+
+    private void handleAudio(Uri uri) {
+        new Thread(() -> {
+            try {
+                String name = displayName(uri);
+                String mime = getContentResolver().getType(uri);
+                if (mime == null || mime.isEmpty()) mime = guessAudioMime(name);
+                byte[] bytes = readAll(uri, MAX_AUDIO_BYTES);
+                if (bytes == null || bytes.length == 0) {
+                    JSONObject e1 = new JSONObject();
+                    e1.put("error", "音频读不出来（可能超过 12MB），换个小一点的试试");
+                    js("window.Native.onAudio(" + JSONObject.quote(e1.toString()) + ")");
+                    return;
+                }
+                String b64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                JSONObject o = new JSONObject();
+                o.put("name", name);
+                o.put("mime", mime);
+                o.put("b64", b64);
+                js("window.Native.onAudio(" + JSONObject.quote(o.toString()) + ")");
+            } catch (Exception e) {
+                js("window.Native.onAudio('{}')");
+            } catch (OutOfMemoryError e) {
+                js("window.Native.onAudio('{}')");
+            }
+        }).start();
     }
 
     private void handleBookFile(Uri uri) {
@@ -738,6 +800,10 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public void pickBookFile() { runOnUiThread(new Runnable() {
             @Override public void run() { MainActivity.this.pickBookFile(); }
+        }); }
+
+        @JavascriptInterface public void pickAudio() { runOnUiThread(new Runnable() {
+            @Override public void run() { MainActivity.this.pickAudio(); }
         }); }
 
         @JavascriptInterface public String httpGet(String url) {

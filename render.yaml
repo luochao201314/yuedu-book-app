@@ -20,4 +20,11 @@ services:
         sync: false
       - key: OCR_SPACE_KEY       # 同上
         sync: false
+      # —— 以下为「音频绘本」用到的百度网盘开放平台应用，不填则网盘入口自动隐藏（音频直链不受影响）——
+      - key: BAIDU_PAN_APPKEY    # 百度网盘开放平台 AppKey，可留空
+        sync: false
+      - key: BAIDU_PAN_SECRET    # 对应的 SecretKey，可留空
+        sync: false
+      - key: BAIDU_PAN_REDIRECT  # 留空则自动用 <后端域名>/api/pan/baidu/callback
+        sync: false
 # 注意：PORT 由 Render 自动注入，server.js 已用 process.env.PORT 读取，无需在此设置。

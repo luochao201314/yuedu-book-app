@@ -272,6 +272,40 @@
       }
       return data;
     },
+    /** 音频转写：把一段 16k 单声道 WAV 变成英文文稿 */
+    async asr(audioB64, lang) {
+      const send = () =>
+        Api.req('/api/asr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio: audioB64, language: lang || 'en-US' }),
+        }, 60000);
+      const data = await Api.retryAfterWake(send);
+      if (data && data.mock) {
+        const err = new Error('后端未配置语音转写密钥');
+        err.status = 200;
+        err.data = data;
+        throw err;
+      }
+      return data;
+    },
+    /* ---- 网盘（百度网盘） ---- */
+    panConfig() {
+      return Api.req('/api/pan/config', { cache: 'no-store' }, 30000);
+    },
+    panAuth(state) {
+      return Api.req('/api/pan/baidu/auth?state=' + encodeURIComponent(state), { cache: 'no-store' }, 30000);
+    },
+    panSession(state) {
+      return Api.req('/api/pan/baidu/session?state=' + encodeURIComponent(state), { cache: 'no-store' }, 30000);
+    },
+    panList(state, dir) {
+      const q = '/api/pan/baidu/list?state=' + encodeURIComponent(state) + '&dir=' + encodeURIComponent(dir || '/');
+      return Api.req(q, { cache: 'no-store' }, 45000);
+    },
+    panStreamUrl(state, fsId) {
+      return Api.base() + '/api/pan/baidu/stream?state=' + encodeURIComponent(state) + '&fs_id=' + encodeURIComponent(fsId);
+    },
     /** 单词音标（IPA）：后端代理 dictionaryapi.dev，结果本机缓存 */
     async ipa(word) {
       const w = String(word || '').toLowerCase().replace(/[^a-z'\-]/g, '');
@@ -402,6 +436,7 @@
     onPhoto: null,
     onPhotos: null,
     onBookFile: null,
+    onAudio: null,
     onError: null,
     onAutoStop: null,
     onResume: null,
@@ -451,6 +486,11 @@
       let obj = null;
       try { obj = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { obj = null; }
       if (Native.onBookFile) Native.onBookFile(obj);
+    },
+    onAudio(json) {
+      let obj = null;
+      try { obj = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { obj = null; }
+      if (Native.onAudio) Native.onAudio(obj);
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
@@ -515,6 +555,49 @@
         this._audio = null;
       }
     },
+    /* ---- 真人音频领读：播放录音里的一句话（音频绘本） ---- */
+    _clip: null,
+    _clipTimer: 0,
+    playClip(src, start, end, rate) {
+      this.stop(); // 先停掉一切正在播的声音，避免叠音
+      if (!src) return false;
+      const rate2 = Math.max(0.5, Math.min(1.5, Number(rate) || 1));
+      const from = Math.max(0, Number(start) || 0);
+      const span = Math.max(0.25, (Number(end) || from + 1) - from);
+      const el = new Audio();
+      el.preload = 'auto';
+      el.src = src;
+      this._clip = el;
+      let started = false;
+      const begin = () => {
+        if (started || this._clip !== el) return;
+        started = true;
+        try {
+          if (from > 0) el.currentTime = from;
+          el.playbackRate = rate2;
+          el.play().catch(() => {});
+        } catch (e) {}
+        clearTimeout(this._clipTimer);
+        // 兜底：到点强制停，防止个别内核不触发 ended
+        this._clipTimer = setTimeout(() => {
+          if (this._clip === el) this._stopClip();
+        }, (span / rate2) * 1000 + 600);
+      };
+      el.addEventListener('loadedmetadata', begin);
+      el.addEventListener('canplay', begin);
+      el.addEventListener('ended', () => { if (this._clip === el) this._stopClip(); });
+      el.addEventListener('error', () => { if (this._clip === el) this._stopClip(); });
+      return true;
+    },
+    _stopClip() {
+      clearTimeout(this._clipTimer);
+      this._clipTimer = 0;
+      const el = this._clip;
+      this._clip = null;
+      if (el) {
+        try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
+      }
+    },
     _native(text, speed, o, isZh) {
       if (Native.available()) {
         try {
@@ -555,6 +638,7 @@
       this._sayQueue = [];
       this._sayPlaying = false;
       this._stopAudio();
+      this._stopClip();
       if (Native.available()) {
         try {
           Android.stopSpeak();
@@ -758,6 +842,280 @@
         });
       }
       return grade;
+    },
+  };
+
+  /* ---------------- 音频仓库（IndexedDB，存本地音频文件） ---------------- */
+  const Idb = {
+    _p: null,
+    open() {
+      if (this._p) return this._p;
+      this._p = new Promise((resolve, reject) => {
+        try {
+          if (!window.indexedDB) throw new Error('设备不支持本地音频存储');
+          const rq = indexedDB.open('yq.audio.v1', 1);
+          rq.onupgradeneeded = () => {
+            const db = rq.result;
+            if (db.objectStoreNames.indexOf('files') < 0) db.createObjectStore('files');
+          };
+          rq.onsuccess = () => resolve(rq.result);
+          rq.onerror = () => reject(rq.error || new Error('打开本地音频库失败'));
+        } catch (e) {
+          reject(e);
+        }
+      });
+      return this._p;
+    },
+    _run(mode, fn) {
+      return this.open().then(
+        (db) =>
+          new Promise((resolve, reject) => {
+            let req;
+            const t = db.transaction('files', mode);
+            try {
+              req = fn(t.objectStore('files'));
+            } catch (e) {
+              return reject(e);
+            }
+            t.oncomplete = () => resolve(req ? req.result : undefined);
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error);
+          })
+      );
+    },
+    put(key, blob) {
+      return this._run('readwrite', (st) => st.put(blob, key));
+    },
+    get(key) {
+      return this._run('readonly', (st) => st.get(key));
+    },
+    del(key) {
+      return this._run('readwrite', (st) => st.delete(key));
+    },
+  };
+
+  /* ---------------- 音频绘本：音频 → 文稿 ---------------- */
+  const AudioBook = {
+    MAX_SECONDS: 480,   // 单次最多 8 分钟（手机内存有限）
+    SEG_MAX: 12,        // 单段最长 12s
+    SEG_GAP: 0.32,      // 静音超过 0.32s 断开
+    _urls: {},          // 本地音频 key → objectURL
+
+    round: (n) => Math.round(Number(n) * 100) / 100,
+
+    /** 取音频二进制：远程链接走后端代理（绕 CORS / 防盗链），本地直接用 Blob */
+    async fetchBuffer(source) {
+      if (source && source.blob) return source.blob.arrayBuffer();
+      const url = String((source && source.url) || '');
+      if (!url) throw new Error('没有音频地址');
+      const base = Api.base();
+      const target = /^blob:|^data:/.test(url) || (base && url.indexOf(base) === 0)
+        ? url
+        : base + '/api/audio/proxy?url=' + encodeURIComponent(url);
+      const r = await fetch(target);
+      if (!r.ok) throw new Error('音频下载失败（' + r.status + '），检查链接是否可访问');
+      return r.arrayBuffer();
+    },
+
+    async decode(buf) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) throw new Error('当前设备不支持音频解码');
+      const ac = new AC();
+      try {
+        const ab = await new Promise((resolve, reject) => {
+          let p;
+          try {
+            p = ac.decodeAudioData(buf, resolve, reject);
+          } catch (e) {
+            return reject(e);
+          }
+          if (p && p.then) p.then(resolve, reject);
+        });
+        if (!ab || !ab.length) throw new Error('音频解码为空');
+        return ab;
+      } finally {
+        try { ac.close(); } catch (e) {}
+      }
+    },
+
+    mono(buffer) {
+      const ch = buffer.numberOfChannels || 1;
+      const n = buffer.length;
+      const out = new Float32Array(n);
+      for (let c = 0; c < ch; c++) {
+        const d = buffer.getChannelData(c);
+        for (let i = 0; i < n; i++) out[i] += d[i] / ch;
+      }
+      return out;
+    },
+
+    /** 按能量找静音，切成人声片段（每段 ≤ SEG_MAX 秒） */
+    segment(mono, rate) {
+      const frame = Math.max(1, Math.round(rate * 0.02)); // 20ms 一帧
+      const frames = Math.floor(mono.length / frame);
+      if (!frames) return [];
+      const rms = new Float32Array(frames);
+      for (let i = 0; i < frames; i++) {
+        const off = i * frame;
+        let s = 0;
+        for (let k = 0; k < frame; k++) s += mono[off + k] * mono[off + k];
+        rms[i] = Math.sqrt(s / frame);
+      }
+      const sorted = Array.prototype.slice.call(rms).sort((a, b) => a - b);
+      const floor = sorted[Math.floor(sorted.length * 0.1)] || 0;
+      const thr = Math.max(0.006, floor * 3);
+      const segs = [];
+      let start = -1;
+      let lastVoice = -1;
+      for (let i = 0; i < frames; i++) {
+        const t = i * 0.02;
+        if (rms[i] > thr) {
+          if (start < 0) start = t;
+          lastVoice = t;
+          if (t - start > this.SEG_MAX) {
+            segs.push([start, lastVoice]);
+            start = -1;
+          }
+        } else if (start >= 0 && t - lastVoice > this.SEG_GAP) {
+          if (lastVoice - start >= 0.35) segs.push([start, lastVoice + 0.12]);
+          start = -1;
+        }
+      }
+      if (start >= 0 && lastVoice - start >= 0.35) segs.push([start, lastVoice + 0.12]);
+      return segs;
+    },
+
+    /** 截取一段并重采样成 16k / 单声道 / 16bit WAV（Azure 短音频接口要求） */
+    wav16k(mono, rate, start, end) {
+      const outRate = 16000;
+      const s0 = Math.max(0, Math.floor(start * rate));
+      const s1 = Math.min(mono.length, Math.ceil(end * rate));
+      const n = Math.max(1, s1 - s0);
+      const ratio = rate / outRate;
+      const outLen = Math.max(1, Math.floor(n / ratio));
+      const pcm = new Int16Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const pos = s0 + i * ratio;
+        const i0 = Math.floor(pos);
+        const i1 = Math.min(mono.length - 1, i0 + 1);
+        const frac = pos - i0;
+        let v = mono[i0] * (1 - frac) + mono[i1] * frac;
+        if (v > 1) v = 1;
+        else if (v < -1) v = -1;
+        pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+      }
+      return pcmToWav(pcm, outRate);
+    },
+
+    cleanText(t) {
+      return String(t || '')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201c\u201d]/g, '"')
+        .replace(/\s+/g, ' ')
+        .replace(/^[\s\-–—.,;:]+/, '')
+        .trim();
+    },
+
+    splitSent(text) {
+      return String(text || '')
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 1 && /[A-Za-z]{2}/.test(s));
+    },
+
+    /**
+     * 主流程：音频 → 逐段转写 → 带时间戳的句子
+     * source: { blob } 或 { url }
+     * 返回 { sentences:[{en, a:[开始,结束]}], duration, segments }
+     */
+    async transcribe(source, onProgress) {
+      const report = typeof onProgress === 'function' ? onProgress : function () {};
+      report(0.02, '正在读取音频…');
+      const buf = await this.fetchBuffer(source);
+      report(0.1, '正在解码音频…');
+      const ab = await this.decode(buf);
+      const dur = ab.duration || 0;
+      if (!dur) throw new Error('音频时长为 0，文件可能损坏');
+      if (dur > this.MAX_SECONDS + 8) {
+        throw new Error('音频约 ' + Math.round(dur / 60) + ' 分钟，超过单次 ' + Math.round(this.MAX_SECONDS / 60) + ' 分钟上限，请先剪一小段');
+      }
+      const limit = Math.min(dur, this.MAX_SECONDS);
+      const mono = this.mono(ab);
+      const rate = ab.sampleRate;
+      report(0.18, '正在切分语音…');
+      let segs = this.segment(mono, rate)
+        .map((s) => [s[0], Math.min(s[1], limit)])
+        .filter((s) => s[1] - s[0] >= 0.35);
+      if (!segs.length) throw new Error('没检测到人声，换个音频试试');
+      if (segs.length > 160) segs = segs.slice(0, 160);
+
+      const out = [];
+      let failed = 0;
+      for (let i = 0; i < segs.length; i++) {
+        const a = segs[i][0];
+        const b = segs[i][1];
+        report(0.2 + 0.78 * (i / segs.length), '正在转写 ' + (i + 1) + '/' + segs.length + ' 段…');
+        let text = '';
+        try {
+          const r = await Api.asr(bufToB64(this.wav16k(mono, rate, a, b)), 'en-US');
+          text = (r && r.text) || '';
+        } catch (e) {
+          failed++;
+          if (failed >= 3 && !out.length) throw e; // 连续失败且一句没成功，直接报错
+          continue;
+        }
+        text = this.cleanText(text);
+        if (!text) continue;
+        const parts = this.splitSent(text);
+        if (parts.length <= 1) {
+          out.push({ en: text, a: [this.round(a), this.round(b)] });
+        } else {
+          // 一段里有多句：按字符数比例分配时间
+          const total = parts.reduce((n, p) => n + p.length, 0) || 1;
+          let cursor = a;
+          parts.forEach((p) => {
+            const span = (b - a) * (p.length / total);
+            out.push({ en: p, a: [this.round(cursor), this.round(cursor + span)] });
+            cursor += span;
+          });
+        }
+      }
+      report(1, '转写完成');
+      if (!out.length) throw new Error('没有识别出英文内容，确认这是一段英语音频');
+      return { sentences: out, duration: dur, segments: segs.length };
+    },
+
+    /** 取一本书的音频播放地址（本地音频从 IndexedDB 转成 blob URL 并缓存） */
+    async srcOf(book) {
+      const a = book && book.audio;
+      if (!a) return '';
+      if (a.kind === 'url') return a.url || '';
+      if (a.kind === 'idb') {
+        if (this._urls[a.key]) return this._urls[a.key];
+        try {
+          const blob = await Idb.get(a.key);
+          if (!blob) return '';
+          const url = URL.createObjectURL(blob);
+          this._urls[a.key] = url;
+          return url;
+        } catch (e) {
+          return '';
+        }
+      }
+      return '';
+    },
+
+    async saveLocal(key, blob) {
+      await Idb.put(key, blob);
+      return { kind: 'idb', key: key, name: blob.name || '' };
+    },
+
+    async removeLocal(key) {
+      if (this._urls[key]) {
+        try { URL.revokeObjectURL(this._urls[key]); } catch (e) {}
+        delete this._urls[key];
+      }
+      try { await Idb.del(key); } catch (e) {}
     },
   };
 
@@ -1026,6 +1384,46 @@
     });
   }
 
+  /* ---------------- 选择本地音频 ---------------- */
+  function pickAudioFile() {
+    return new Promise((resolve, reject) => {
+      if (Native.available()) {
+        Native.onAudio = (obj) => {
+          Native.onAudio = null;
+          if (obj && obj.error) return reject(new Error(obj.error));
+          if (!obj || !obj.b64) return resolve(null);
+          try {
+            const bytes = new Uint8Array(b64ToBuf(obj.b64));
+            resolve({ name: obj.name || 'audio', blob: new Blob([bytes], { type: obj.mime || 'audio/mpeg' }) });
+          } catch (e) {
+            reject(new Error('读取音频失败'));
+          }
+        };
+        try {
+          Android.pickAudio();
+        } catch (e) {
+          Native.onAudio = null;
+          reject(e);
+        }
+        return;
+      }
+      const input = $('#filePick');
+      input.value = '';
+      input.removeAttribute('capture');
+      input.removeAttribute('multiple');
+      const oldAccept = input.getAttribute('accept') || 'image/*';
+      input.accept = 'audio/*';
+      input.onchange = () => {
+        input.accept = oldAccept;
+        const f = input.files && input.files[0];
+        if (!f) return resolve(null);
+        if (f.size > 40 * 1024 * 1024) return reject(new Error('音频超过 40MB，请先剪短一些'));
+        resolve({ name: f.name, blob: f });
+      };
+      input.click();
+    });
+  }
+
   /* ---------------- 统计 ---------------- */
   function stats() {
     const ss = Store.sessions();
@@ -1129,9 +1527,12 @@
   APP.Native = Native;
   APP.TTS = TTS;
   APP.Rec = Rec;
+  APP.Idb = Idb;
+  APP.AudioBook = AudioBook;
   APP.pickPhoto = pickPhoto;
   APP.pickPhotos = pickPhotos;
   APP.pickBookFile = pickBookFile;
+  APP.pickAudioFile = pickAudioFile;
   APP.fileToB64 = fileToB64;
   APP.normalizeScore = normalizeScore;
   APP.books = { all: allBooks, byId: bookById, sentenceAt: sentenceAt, count: sentenceCount, progress: bookProgress };

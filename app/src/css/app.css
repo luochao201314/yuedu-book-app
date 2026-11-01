@@ -111,7 +111,9 @@ input{font-family:inherit}
 .dot-own{width:6px;height:6px;border-radius:50%;background:var(--brand);display:inline-block}
 
 .empty{color:var(--sub);font-size:13px;text-align:center;padding:30px 0}
-.float-actions{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + var(--safe-b));width:100%;max-width:480px;padding:0 16px;display:flex;justify-content:flex-end;gap:8px;pointer-events:none;z-index:15}
+.float-actions{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + var(--safe-b));width:100%;max-width:480px;padding:0 16px;display:flex;justify-content:flex-end;gap:6px;pointer-events:none;z-index:15}
+/* 库里三个入口（音频/导入/拍照）要挤得下 320px 宽，字号与内边距略收 */
+.float-actions .fab{padding:12px 13px;font-size:13px;gap:5px}
 .fab{
   pointer-events:auto;background:var(--brand);color:#fff;font-weight:800;font-size:14px;
   padding:13px 18px;border-radius:999px;box-shadow:0 10px 24px rgba(255,122,89,.42);

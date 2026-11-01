@@ -6,6 +6,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns').promises;
 
 // ---- 极简 .env 加载（无需 npm 依赖）----
 try {
@@ -23,7 +24,79 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 
 const MAX_BODY = 16 * 1024 * 1024;   // 16MB（约 12MB 音频 base64）
 const MAX_AUDIO = 12 * 1024 * 1024;
+const AUDIO_MAX = 40 * 1024 * 1024;  // 音频代理/网盘流上限 40MB
 const ipaCache = new Map();          // 单词 → { at, data }
+const panSessions = new Map();       // 网盘授权会话：state → { accessToken, refreshToken, expiresAt }
+
+/* 只允许公网 http(s) 目标，挡住内网地址（避免被当成 SSRF 跳板） */
+function isPrivateIp(ip) {
+  const s = String(ip || '').trim();
+  if (!s) return true;
+  if (s.indexOf(':') < 0) {
+    const p = s.split('.').map(Number);
+    if (p.length !== 4 || p.some((n) => !isFinite(n))) return true;
+    if (p[0] === 0 || p[0] === 10 || p[0] === 127) return true;
+    if (p[0] === 192 && p[1] === 168) return true;
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+    if (p[0] === 169 && p[1] === 254) return true;
+    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;
+    return false;
+  }
+  const v = s.toLowerCase();
+  return v === '::1' || v === '::' || v.indexOf('fc') === 0 || v.indexOf('fd') === 0 || v.indexOf('fe80') === 0;
+}
+async function assertPublicUrl(raw) {
+  let t;
+  try { t = new URL(raw); } catch (e) { throw new Error('地址格式不对'); }
+  if (!/^https?:$/.test(t.protocol)) throw new Error('只支持 http / https 链接');
+  let addrs = [];
+  try { addrs = await dns.lookup(t.hostname, { all: true }); } catch (e) { throw new Error('域名解析失败'); }
+  if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) throw new Error('不允许访问内网地址');
+  return t;
+}
+
+/* 透传音频（支持 Range，<audio> 拖动进度条才顺滑） */
+async function streamAudio(res, req, target, extraHeaders) {
+  const headers = Object.assign(
+    { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36' },
+    extraHeaders || {}
+  );
+  if (req.headers.range) headers.Range = req.headers.range;
+  const r = await fetch(target, { headers, redirect: 'follow' });
+  const h = {};
+  ['content-type', 'accept-ranges', 'content-range', 'content-length', 'etag', 'last-modified'].forEach((k) => {
+    const v = r.headers.get(k);
+    if (v) h[k] = v;
+  });
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > AUDIO_MAX) {
+    res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ error: '音频超过 40MB，请先用更短的片段' }));
+  }
+  h['Cache-Control'] = 'no-store';
+  res.writeHead(r.status, h);
+  res.end(buf);
+}
+
+/* 百度网盘：刷新 access_token */
+async function panRefresh(sid) {
+  const s = panSessions.get(sid);
+  if (!s || !s.refreshToken) return null;
+  if (!process.env.BAIDU_PAN_APPKEY || !process.env.BAIDU_PAN_SECRET) return null;
+  const url = 'https://openapi.baidu.com/oauth/2.0/token?grant_type=refresh_token' +
+    '&refresh_token=' + encodeURIComponent(s.refreshToken) +
+    '&client_id=' + encodeURIComponent(process.env.BAIDU_PAN_APPKEY) +
+    '&client_secret=' + encodeURIComponent(process.env.BAIDU_PAN_SECRET);
+  const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+  const j = await r.json().catch(() => null);
+  if (!j || !j.access_token) return null;
+  s.accessToken = j.access_token;
+  s.refreshToken = j.refresh_token || s.refreshToken;
+  s.expiresAt = Date.now() + (Number(j.expires_in) || 0) * 1000;
+  panSessions.set(sid, s);
+  return s.accessToken;
+}
+
 
 function send(res, code, obj, headers = {}) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
@@ -62,8 +135,10 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       azure: !!process.env.AZURE_SPEECH_KEY,
       tts: !!process.env.AZURE_SPEECH_KEY,
+      asr: !!process.env.AZURE_SPEECH_KEY,
       ocr: !!process.env.OCR_SPACE_KEY,
-      ver: 6
+      pan: !!(process.env.BAIDU_PAN_APPKEY && process.env.BAIDU_PAN_SECRET),
+      ver: 7
     });
   }
 
@@ -372,6 +447,205 @@ const server = http.createServer(async (req, res) => {
     }
     // 上游抖动/超时：不缓存，下次点这个词还能再试
     return send(res, 200, { word: w, ipa: '', note: 'upstream' });
+  }
+
+  // ---------------- 语音转写（音频 → 文稿） ----------------
+  // 前端把音频按静音切成 ≤12s 的 16k 单声道 WAV 片段逐段上传，这里返回该段的英文文本。
+  // 与发音评测共用 AZURE_SPEECH_KEY。
+  if (u.pathname === '/api/asr' && req.method === 'POST') {
+    let audio, language;
+    try { const j = JSON.parse(await readBody(req)); audio = j.audio; language = j.language; }
+    catch (e) { return send(res, 400, { error: 'bad json' }); }
+    if (typeof audio !== 'string' || !audio) return send(res, 400, { error: 'audio required' });
+    if (audio.length > MAX_AUDIO) return send(res, 413, { error: 'audio too large' });
+
+    if (!process.env.AZURE_SPEECH_KEY) {
+      return send(res, 200, { mock: true, text: '', words: [], note: '未配置 AZURE_SPEECH_KEY，无法转写' });
+    }
+    const buf = Buffer.from(audio, 'base64');
+    if (buf.length < 1600) return send(res, 400, { error: 'audio too short', bytes: buf.length });
+    if (buf.slice(0, 4).toString('ascii') !== 'RIFF') return send(res, 400, { error: 'audio must be 16k mono PCM WAV' });
+
+    try {
+      const region = process.env.AZURE_SPEECH_REGION || 'eastasia';
+      const lang = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/.test(language || '') ? language : 'en-US';
+      const url = `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1` +
+        `?language=${encodeURIComponent(lang)}&format=detailed&profanity=masked`;
+      const ar = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY,
+          'Content-Type': 'audio/wav; codecs=audio/pcm; samplerate=16000',
+          'Accept': 'application/json'
+        },
+        body: buf
+      });
+      const raw = await ar.text();
+      if (!ar.ok) {
+        console.error('[asr] azure http', ar.status, raw.slice(0, 300));
+        return send(res, 502, { error: 'asr failed', status: ar.status, msg: raw.slice(0, 200) });
+      }
+      let j;
+      try { j = JSON.parse(raw); } catch (e) { return send(res, 502, { error: 'asr bad json' }); }
+      if (j.RecognitionStatus && j.RecognitionStatus !== 'Success') {
+        // 静音/噪声片段不算失败，返回空文本让前端跳过
+        return send(res, 200, { text: '', words: [], status: j.RecognitionStatus });
+      }
+      const nb = (j.NBest && j.NBest[0]) || {};
+      const words = (nb.Words || []).map((w) => ({
+        w: w.Word || '',
+        start: Math.round((Number(w.Offset) || 0) / 10000) / 1000,      // 100ns ticks → 秒
+        end: Math.round(((Number(w.Offset) || 0) + (Number(w.Duration) || 0)) / 10000) / 1000
+      })).filter((w) => w.w);
+      const text = (nb.Display || j.DisplayText || words.map((w) => w.w).join(' ')).trim();
+      return send(res, 200, { text, words, duration: Math.round((Number(j.Duration) || 0) / 10000) / 1000 });
+    } catch (e) {
+      console.error('[asr] error', e);
+      return send(res, 502, { error: 'asr failed', msg: String(e.message || e) });
+    }
+  }
+
+  // ---------------- 音频代理（绕过 CORS / 直链防盗链） ----------------
+  if (u.pathname === '/api/audio/proxy' && req.method === 'GET') {
+    const target = u.searchParams.get('url') || '';
+    if (!/^https?:\/\//i.test(target)) return send(res, 400, { error: 'url required' });
+    try {
+      await assertPublicUrl(target);
+      return await streamAudio(res, req, target, { Referer: 'https://pan.baidu.com/' });
+    } catch (e) {
+      return send(res, 502, { error: 'audio proxy failed', msg: String(e.message || e) });
+    }
+  }
+
+  // ---------------- 百度网盘（开放平台 OAuth） ----------------
+  // 需要配置：BAIDU_PAN_APPKEY / BAIDU_PAN_SECRET，回调地址填 <后端域名>/api/pan/baidu/callback
+  if (u.pathname === '/api/pan/config') {
+    return send(res, 200, {
+      baidu: !!(process.env.BAIDU_PAN_APPKEY && process.env.BAIDU_PAN_SECRET),
+      note: process.env.BAIDU_PAN_APPKEY ? '' : '未配置百度网盘 AppKey/SecretKey'
+    });
+  }
+
+  if (u.pathname === '/api/pan/baidu/auth') {
+    const state = String(u.searchParams.get('state') || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+    if (!state) return send(res, 400, { error: 'state required' });
+    if (!process.env.BAIDU_PAN_APPKEY) return send(res, 200, { mock: true, note: '未配置百度网盘 AppKey' });
+    const redirect = process.env.BAIDU_PAN_REDIRECT ||
+      ('https://' + (req.headers.host || '') + '/api/pan/baidu/callback');
+    const url = 'https://openapi.baidu.com/oauth/2.0/authorize?response_type=code' +
+      '&client_id=' + encodeURIComponent(process.env.BAIDU_PAN_APPKEY) +
+      '&redirect_uri=' + encodeURIComponent(redirect) +
+      '&scope=basic,netdisk&display=page&state=' + encodeURIComponent(state);
+    return send(res, 200, { url, redirect });
+  }
+
+  if (u.pathname === '/api/pan/baidu/callback') {
+    const code = String(u.searchParams.get('code') || '');
+    const state = String(u.searchParams.get('state') || '');
+    const back = (msg, ok) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<body style="font-family:-apple-system,sans-serif;padding:40px 24px;text-align:center;color:#22324a;background:#f6f8fb">' +
+        '<div style="font-size:52px;margin-bottom:12px">' + (ok ? '✅' : '⚠️') + '</div>' +
+        '<h2 style="margin:0 0 8px;font-size:19px">' + msg + '</h2>' +
+        '<p style="color:#7a879b;font-size:14px;line-height:1.7">' + (ok ? '已授权成功，回到 App 即可挑选音频。' : '请回到 App 重新试一次。') + '</p>' +
+        '<button onclick="history.back()" style="margin-top:10px;padding:12px 24px;border:none;border-radius:999px;background:#22324a;color:#fff;font-size:15px;font-weight:700">返回 App</button>' +
+        '</body>');
+    };
+    if (!code || !state) return back('授权未完成', false);
+    try {
+      const redirect = process.env.BAIDU_PAN_REDIRECT ||
+        ('https://' + (req.headers.host || '') + '/api/pan/baidu/callback');
+      const tr = await fetch('https://openapi.baidu.com/oauth/2.0/token?grant_type=authorization_code' +
+        '&code=' + encodeURIComponent(code) +
+        '&client_id=' + encodeURIComponent(process.env.BAIDU_PAN_APPKEY || '') +
+        '&client_secret=' + encodeURIComponent(process.env.BAIDU_PAN_SECRET || '') +
+        '&redirect_uri=' + encodeURIComponent(redirect), { signal: AbortSignal.timeout(15000) });
+      const tj = await tr.json().catch(() => null);
+      if (!tj || !tj.access_token) {
+        console.error('[pan] token exchange failed', JSON.stringify(tj || {}).slice(0, 300));
+        return back('换取授权失败', false);
+      }
+      panSessions.set(state, {
+        accessToken: tj.access_token,
+        refreshToken: tj.refresh_token || '',
+        expiresAt: Date.now() + (Number(tj.expires_in) || 0) * 1000,
+        at: Date.now()
+      });
+      return back('百度网盘已连接', true);
+    } catch (e) {
+      console.error('[pan] callback error', e);
+      return back('授权出错：' + String(e.message || e).slice(0, 80), false);
+    }
+  }
+
+  if (u.pathname === '/api/pan/baidu/session') {
+    const state = String(u.searchParams.get('state') || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    const s = panSessions.get(state);
+    return send(res, 200, { ok: !!s, at: s ? s.at : 0 });
+  }
+
+  if (u.pathname === '/api/pan/baidu/list') {
+    const state = String(u.searchParams.get('state') || '');
+    const dir = String(u.searchParams.get('dir') || '/').slice(0, 300);
+    const s = panSessions.get(state);
+    if (!s) return send(res, 401, { error: 'need auth', msg: '网盘授权已失效，请重新连接' });
+    const call = async (token) => {
+      const q = 'https://pan.baidu.com/rest/2.0/xpan/file?method=list&order=name&start=0&limit=300' +
+        '&dir=' + encodeURIComponent(dir) + '&access_token=' + encodeURIComponent(token);
+      const r = await fetch(q, { headers: { 'User-Agent': 'pan.baidu.com' }, signal: AbortSignal.timeout(15000) });
+      return r.json();
+    };
+    try {
+      let j = await call(s.accessToken);
+      if (j && (j.errno === -6 || j.errno === 111)) {   // token 过期 → 刷新一次
+        const t = await panRefresh(state);
+        if (t) j = await call(t);
+      }
+      if (!j || j.errno) return send(res, 502, { error: 'pan list failed', errno: j && j.errno, msg: (j && j.errmsg) || '' });
+      const AUDIO_EXT = /\.(mp3|m4a|aac|wav|flac|ogg|opus|wma|amr|mp4|m4b)$/i;
+      const items = (j.list || []).map((f) => ({
+        fs_id: String(f.fs_id),
+        name: f.server_filename || '',
+        path: f.path || '',
+        size: f.size || 0,
+        isdir: !!f.isdir,
+        audio: AUDIO_EXT.test(f.server_filename || ''),
+        time: f.server_mtime || 0
+      }));
+      return send(res, 200, { dir, items });
+    } catch (e) {
+      return send(res, 502, { error: 'pan list failed', msg: String(e.message || e) });
+    }
+  }
+
+  if (u.pathname === '/api/pan/baidu/stream' && req.method === 'GET') {
+    const state = String(u.searchParams.get('state') || '');
+    const fsId = String(u.searchParams.get('fs_id') || '').replace(/[^0-9]/g, '');
+    const s = panSessions.get(state);
+    if (!s) return send(res, 401, { error: 'need auth' });
+    if (!fsId) return send(res, 400, { error: 'fs_id required' });
+    const dlinkOf = async (token) => {
+      const q = 'https://pan.baidu.com/rest/2.0/xpan/multimedia?method=filemetas&dlink=1&fsids=%5B' + fsId + '%5D' +
+        '&access_token=' + encodeURIComponent(token);
+      const r = await fetch(q, { headers: { 'User-Agent': 'pan.baidu.com' }, signal: AbortSignal.timeout(15000) });
+      const j = await r.json();
+      return j && j.list && j.list[0] ? j.list[0].dlink : '';
+    };
+    try {
+      let dlink = await dlinkOf(s.accessToken);
+      if (!dlink) {
+        const t = await panRefresh(state);
+        if (t) dlink = await dlinkOf(t);
+      }
+      if (!dlink) return send(res, 502, { error: 'no dlink', msg: '拿不到下载直链，可能文件已移动或无权限' });
+      const sep = dlink.indexOf('?') >= 0 ? '&' : '?';
+      return await streamAudio(res, req, dlink + sep + 'access_token=' + encodeURIComponent(s.accessToken), {
+        'User-Agent': 'pan.baidu.com'
+      });
+    } catch (e) {
+      return send(res, 502, { error: 'pan stream failed', msg: String(e.message || e) });
+    }
   }
 
   // OCR（代理 OCR.space）

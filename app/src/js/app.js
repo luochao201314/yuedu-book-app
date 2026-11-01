@@ -41,6 +41,8 @@
     $('#delCancel').onclick = () => APP.ui.closeSheet();
     $('#delOk').onclick = () => {
       Store.removeMine(b.id);
+      // 音频绘本的本地音频一并清掉，避免占满手机空间
+      if (b.audio && b.audio.kind === 'idb') APP.AudioBook.removeLocal(b.audio.key);
       APP.ui.closeSheet();
       APP.state.book = null;
       go('library');
@@ -72,6 +74,7 @@
   /* ---------- 绘本库动作 ---------- */
   $('#ocrBtn').addEventListener('click', () => APP.ui.openOCR());
   $('#importBtn').addEventListener('click', () => APP.ui.openImport());
+  $('#audioBtn').addEventListener('click', () => APP.ui.openAudio());
   $('#syncBtn').addEventListener('click', () => APP.ui.syncPublic());
 
   /* ---------- 录音条 ---------- */
