@@ -17,6 +17,7 @@ import android.media.MediaRecorder;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.DocumentsContract;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -33,6 +34,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
@@ -47,6 +49,8 @@ import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -58,7 +62,9 @@ public class MainActivity extends Activity {
     private static final int REQ_GALLERY_MULTI = 104;
     private static final int REQ_FILE = 105;
     private static final int REQ_AUDIO_CLIP = 106;   // 选音频文件（与录音权限 REQ_AUDIO 区分，否则编译报重复定义）
+    private static final int REQ_FOLDER = 107;        // 选文件夹（批量导入音频绘本）
     private static final int MAX_PICK_IMAGES = 20;
+    private static final int MAX_FOLDER_FILES = 200;  // 一个文件夹最多导入的音频数
     private static final int MAX_BOOK_BYTES = 12 * 1024 * 1024;
     private static final int SAMPLE_RATE = 16000;
 
@@ -77,6 +83,10 @@ public class MainActivity extends Activity {
     private String lastRecording = null;
     // 从别的 App（百度网盘 / 文件管理器）分享进来的音频；页面没准备好时先挂起
     private Uri pendingSharedAudio = null;
+    // 选文件夹 / 多个文件分享后，收集到的音频 URI 列表（importFolderAudio 逐个回传）
+    private ArrayList<Uri> folderAudios = new ArrayList<>();
+    private String pendingFolderJson = null;   // 文件夹音频列表（页面就绪前挂起）
+    private String pendingSharedLink = null;    // 分享进来的链接（页面就绪前挂起）
     private volatile boolean webReady = false;
 
     @Override
@@ -111,6 +121,8 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 webReady = true;
                 flushSharedAudio();
+                flushFolder();
+                flushSharedLink();
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -144,20 +156,72 @@ public class MainActivity extends Activity {
     private void handleSharedIntent(Intent intent) {
         if (intent == null) return;
         String act = intent.getAction();
-        Uri uri = null;
         if (Intent.ACTION_SEND.equals(act)) {
+            // 百度网盘等「分享」出来的是链接（text/plain），不是文件；文件型分享走 EXTRA_STREAM
+            Uri uri = null;
             Object o = intent.getParcelableExtra(Intent.EXTRA_STREAM);
             if (o instanceof Uri) uri = (Uri) o;
-        } else if (Intent.ACTION_VIEW.equals(act)) {
-            uri = intent.getData();
+            if (uri != null) { handleSharedUri(uri); return; }
+            CharSequence txt = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
+            if (txt != null && !txt.toString().trim().isEmpty()) handleSharedText(txt.toString());
+            return;
         }
+        if (Intent.ACTION_SEND_MULTIPLE.equals(act)) {
+            // 一次分享多个音频：收集 URI 后交给前端逐个导入
+            ArrayList<Uri> uris = new ArrayList<>();
+            ClipData clip = intent.getClipData();
+            if (clip != null) {
+                for (int k = 0; k < clip.getItemCount(); k++) {
+                    Uri u = clip.getItemAt(k).getUri();
+                    if (u != null) uris.add(u);
+                }
+            }
+            if (uris.isEmpty()) {
+                try {
+                    ArrayList<Uri> list = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                    if (list != null) uris.addAll(list);
+                } catch (Exception ignored) {}
+            }
+            if (!uris.isEmpty()) {
+                folderAudios = new ArrayList<>(uris);
+                sendFolderList();
+            }
+            return;
+        }
+        if (Intent.ACTION_VIEW.equals(act)) {
+            handleSharedUri(intent.getData());
+        }
+    }
+
+    private void handleSharedUri(Uri uri) {
         if (uri == null) return;
         String mime = null;
         try { mime = getContentResolver().getType(uri); } catch (Exception ignored) {}
-        // 只接音频；分享进来的若是其它类型就忽略，不打断正常启动
         if (mime != null && !mime.startsWith("audio") && !mime.contains("mpeg") && !mime.contains("mp4")) return;
         pendingSharedAudio = uri;
         flushSharedAudio();
+    }
+
+    /** 分享进来的是一段文字（如网盘分享链接）：是链接才处理，否则不打扰用户 */
+    private void handleSharedText(String txt) {
+        if (txt == null) return;
+        String t = txt.trim();
+        if (t.isEmpty()) return;
+        if (!t.startsWith("http://") && !t.startsWith("https://")) return; // 不是链接，忽略
+        String kind = "unknown";
+        String lower = t.toLowerCase(Locale.ROOT);
+        if (lower.contains("pan.baidu.com") || lower.contains("pan.baidupcs.com")) kind = "pan";
+        else if (lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".wav")
+                || lower.endsWith(".aac") || lower.endsWith(".ogg") || lower.endsWith(".flac")
+                || lower.endsWith(".mp4") || lower.contains("archive.org") || lower.contains("soundhelix")
+                || lower.contains(".mp3") || lower.contains(".m4a") || lower.contains(".wav")) kind = "audio";
+        try {
+            JSONObject o = new JSONObject();
+            o.put("url", t);
+            o.put("kind", kind);
+            pendingSharedLink = o.toString();
+        } catch (Exception ignored) {}
+        flushSharedLink();
     }
 
     /** 页面就绪后把挂起的分享音频交给前端 */
@@ -168,6 +232,22 @@ public class MainActivity extends Activity {
         runOnUiThread(new Runnable() {
             @Override public void run() { handleAudio(u); }
         });
+    }
+
+    /** 页面就绪后把挂起的文件夹音频列表交给前端 */
+    private void flushFolder() {
+        if (!webReady || pendingFolderJson == null) return;
+        final String j = pendingFolderJson;
+        pendingFolderJson = null;
+        js("window.Native.onFolderAudios(" + j + ")");
+    }
+
+    /** 页面就绪后把挂起的分享链接交给前端 */
+    private void flushSharedLink() {
+        if (!webReady || pendingSharedLink == null) return;
+        final String j = pendingSharedLink;
+        pendingSharedLink = null;
+        js("window.Native.onSharedLink(" + j + ")");
     }
 
     private String readAsset(String name) throws Exception {
@@ -398,6 +478,20 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_FOLDER) {
+            if (res == RESULT_OK && data != null && data.getData() != null) {
+                Uri tree = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Exception ignored) {}
+                folderAudios = new ArrayList<>(listAudioUris(tree, MAX_FOLDER_FILES));
+                sendFolderList();
+            } else {
+                pendingFolderJson = "[]";
+                flushFolder();
+            }
+            return;
+        }
         if (req == REQ_GALLERY_MULTI) {
             if (res == RESULT_OK && data != null) handleMultiImages(data);
             else js("window.Native.onPhotos('[]')");
@@ -611,6 +705,92 @@ public class MainActivity extends Activity {
                 js("window.Native.onAudio('{}')");
             }
         }).start();
+    }
+
+    /** 遍历文件夹（递归，最多 max 个），收集音频文件 URI。
+     *  不依赖 androidx，只用平台 DocumentsContract —— 在只用 build-tools 的环境也能编译。 */
+    private List<Uri> listAudioUris(Uri treeUri, int max) {
+        List<Uri> out = new ArrayList<>();
+        if (treeUri == null) return out;
+        String rootId;
+        try { rootId = DocumentsContract.getTreeDocumentId(treeUri); }
+        catch (Exception e) { return out; }
+        Deque<String> stack = new ArrayDeque<>();
+        stack.push(rootId);
+        while (!stack.isEmpty() && out.size() < max) {
+            String docId = stack.pop();
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId);
+            Cursor c = null;
+            try {
+                c = getContentResolver().query(childrenUri, new String[]{
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                    DocumentsContract.Document.COLUMN_SIZE,
+                    DocumentsContract.Document.COLUMN_FLAGS
+                }, null, null, null);
+                if (c == null) continue;
+                while (c.moveToNext() && out.size() < max) {
+                    String id = c.getString(0);
+                    String name = c.getString(1);
+                    String mime = c.getString(2);
+                    long size = c.isNull(3) ? 0 : c.getLong(3);
+                    Uri child = DocumentsContract.buildDocumentUriUsingTree(treeUri, id);
+                    if (mime != null && mime.equals(DocumentsContract.Document.MIME_TYPE_DIR)) {
+                        stack.push(id); // 子目录继续往下找
+                    } else if (isAudioName(name) && size > 0 && size <= MAX_AUDIO_BYTES) {
+                        out.add(child);
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally { if (c != null) c.close(); }
+        }
+        return out;
+    }
+
+    private boolean isAudioName(String n) {
+        if (n == null) return false;
+        String l = n.toLowerCase(Locale.ROOT);
+        return l.endsWith(".mp3") || l.endsWith(".m4a") || l.endsWith(".aac")
+            || l.endsWith(".wav") || l.endsWith(".ogg") || l.endsWith(".opus")
+            || l.endsWith(".flac") || l.endsWith(".mp4") || l.endsWith(".amr");
+    }
+
+    /** 把 folderAudios 列表发给前端（页面没就绪时先挂起） */
+    private void sendFolderList() {
+        try {
+            JSONArray arr = new JSONArray();
+            for (int i = 0; i < folderAudios.size(); i++) {
+                Uri u = folderAudios.get(i);
+                String name = displayName(u);
+                long size = 0;
+                Cursor c = null;
+                try {
+                    c = getContentResolver().query(u, new String[]{OpenableColumns.SIZE}, null, null, null);
+                    if (c != null && c.moveToFirst() && !c.isNull(0)) size = c.getLong(0);
+                } catch (Exception ignored) {} finally { if (c != null) c.close(); }
+                JSONObject o = new JSONObject();
+                o.put("i", i);
+                o.put("name", name);
+                o.put("size", size);
+                arr.put(o);
+            }
+            pendingFolderJson = arr.toString();
+        } catch (Exception e) {
+            pendingFolderJson = "[]";
+        }
+        flushFolder();
+    }
+
+    /** 选择文件夹（音频绘本批量导入）：用系统 Document Tree 选择器 */
+    private void pickFolder() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            startActivityForResult(i, REQ_FOLDER);
+        } catch (Exception e) {
+            js("window.Native.onError('无法打开文件夹选择器')");
+        }
     }
 
     private void handleBookFile(Uri uri) {
@@ -891,6 +1071,45 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void pickAudio() { runOnUiThread(new Runnable() {
             @Override public void run() { MainActivity.this.pickAudio(); }
         }); }
+
+        /** 选择文件夹（批量导入音频绘本） */
+        @JavascriptInterface public void pickFolder() { runOnUiThread(new Runnable() {
+            @Override public void run() { MainActivity.this.pickFolder(); }
+        }); }
+
+        /** 读取 folderAudios 中第 i 个音频的二进制，逐个回传（避免一次传太多撑爆 WebView） */
+        @JavascriptInterface public void importFolderAudio(int i) {
+            if (i < 0 || i >= folderAudios.size()) {
+                js("window.Native.onFolderAudio('{}')");
+                return;
+            }
+            final Uri u = folderAudios.get(i);
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        String name = displayName(u);
+                        String mime = getContentResolver().getType(u);
+                        if (mime == null || mime.isEmpty()) mime = guessAudioMime(name);
+                        byte[] bytes = readAll(u, MAX_AUDIO_BYTES);
+                        if (bytes == null || bytes.length == 0) {
+                            JSONObject e1 = new JSONObject();
+                            e1.put("error", "读不出来：" + name);
+                            js("window.Native.onFolderAudio(" + JSONObject.quote(e1.toString()) + ")");
+                            return;
+                        }
+                        JSONObject o = new JSONObject();
+                        o.put("name", name);
+                        o.put("mime", mime);
+                        o.put("b64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                        js("window.Native.onFolderAudio(" + JSONObject.quote(o.toString()) + ")");
+                    } catch (Exception e) {
+                        js("window.Native.onFolderAudio('{}')");
+                    } catch (OutOfMemoryError e) {
+                        js("window.Native.onFolderAudio('{}')");
+                    }
+                }
+            }).start();
+        }
 
         /** 唤起百度网盘 App，让用户在网盘里选音频并分享过来 */
         @JavascriptInterface public void openPanApp() { runOnUiThread(new Runnable() {

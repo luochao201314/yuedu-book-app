@@ -1333,7 +1333,11 @@
   function renderLocalPane(pane) {
     pane.innerHTML =
       '<div class="muted" style="margin:0 0 8px">从手机里选音频（mp3 / m4a / wav / aac），会存进 App 本地，离线也能听。</div>' +
-      '<div class="sheet-actions" style="margin-top:0"><button class="btn ghost" id="audioPick">📂 选择音频文件</button></div>';
+      '<div class="sheet-actions" style="margin-top:0;flex-wrap:wrap;gap:8px">' +
+      '<button class="btn ghost" id="audioPick">📂 选择音频文件</button>' +
+      '<button class="btn ghost" id="audioFolder">📁 选择文件夹（批量）</button>' +
+      '</div>' +
+      '<div class="muted" style="margin:8px 0 0;font-size:12px">选文件夹可一次导入整个目录里的所有音频，每个会转写成一本绘本。</div>';
     $('#audioPick').onclick = async () => {
       try {
         const f = await APP.pickAudioFile();
@@ -1343,7 +1347,144 @@
         toast(e.message || '打开文件失败');
       }
     };
+    $('#audioFolder').onclick = () => {
+      APP.pickFolder();
+    };
   }
+
+  /* ================= 文件夹批量导入音频绘本 ================= */
+  function showFolderList(list) {
+    if (!Array.isArray(list) || !list.length) {
+      toast('这个文件夹里没找到音频文件');
+      return;
+    }
+    $('#sheetBody').innerHTML =
+      '<h3>📁 文件夹里的音频（' + list.length + ' 个）</h3>' +
+      '<div class="desc">勾选要导入的音频，每个会转写成一本「音频绘本」（自动领读原声 + 跟读评分）。' +
+      '<span class="muted">建议一次别太多，转写较慢、会消耗云端额度。</span></div>' +
+      '<label class="field" style="border:none;padding:6px 0 2px"><input type="checkbox" id="folderAll" checked /> 全选</label>' +
+      '<div id="folderList" style="max-height:44vh;overflow:auto;margin:4px 0 8px">' +
+      list.map((f, i) =>
+        '<label class="folder-row" style="display:flex;gap:8px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--line)">' +
+        '<input type="checkbox" class="fchk" data-i="' + i + '" checked />' +
+        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">' + esc(f.name || '音频') + '</span>' +
+        '<span class="muted">' + (f.size ? (f.size / 1048576).toFixed(1) + 'MB' : '') + '</span>' +
+        '</label>'
+      ).join('') +
+      '</div>' +
+      '<div class="sheet-actions">' +
+      '<button class="btn ghost" id="folderCancel">取消</button>' +
+      '<button class="btn primary" id="folderImport">导入选中</button>' +
+      '</div>';
+    $('#sheetMask').classList.add('show');
+    $('#folderCancel').onclick = closeSheet;
+    $('#folderAll').onchange = (e) => { $$('#folderList .fchk').forEach((c) => (c.checked = e.target.checked)); };
+    $('#folderImport').onclick = () => {
+      const idx = $$('#folderList .fchk').filter((c) => c.checked).map((c) => Number(c.dataset.i));
+      if (!idx.length) return toast('先勾选要导入的音频');
+      startFolderImport(list, idx);
+    };
+  }
+
+  async function startFolderImport(list, idx) {
+    closeSheet();
+    const total = idx.length;
+    const log = [];
+    let ok = 0;
+    showBatchSheet(total);
+    for (let k = 0; k < total; k++) {
+      const i = idx[k];
+      const f = list[i];
+      updateBatch(k, total, f.name, '读取中');
+      let blob;
+      try { blob = await APP.importFolderAudio(i); }
+      catch (e) { log.push('✗ ' + (f.name || '音频') + '：' + (e.message || '读取失败')); updateBatch(k, total, f.name, '跳过'); continue; }
+      if (!blob) { log.push('✗ ' + (f.name || '音频') + '：空文件或读取失败'); updateBatch(k, total, f.name, '跳过'); continue; }
+      updateBatch(k, total, f.name, '转写中');
+      let r;
+      try {
+        r = await APP.AudioBook.transcribe({ kind: 'blob', blob: blob.blob }, (p, msg) => updateBatch(k, total, f.name, msg, p));
+      } catch (e) { log.push('✗ ' + (f.name || '音频') + '：' + (e.message || '转写失败')); updateBatch(k, total, f.name, '跳过'); continue; }
+      try {
+        const title = titleFromFile(f.name) || defaultMineTitle();
+        const book = await makeAudioBook(title, { kind: 'blob', blob: blob.blob }, r.sentences);
+        Store.addMine(book);
+        ok++;
+        log.push('✓ ' + (f.name || '音频') + '：' + r.sentences.length + ' 句');
+      } catch (e) { log.push('✗ ' + (f.name || '音频') + '：保存失败'); }
+      updateBatch(k + 1, total, '', '');
+    }
+    finishBatch(ok, total, log);
+  }
+
+  function showBatchSheet(total) {
+    $('#sheetBody').innerHTML =
+      '<h3>📥 批量导入音频绘本</h3>' +
+      '<div id="batchCur" class="muted" style="margin:2px 0 8px">准备中…</div>' +
+      '<div style="height:6px;background:#e7edf6;border-radius:3px;overflow:hidden;margin:6px 0 10px"><i id="batchBar" style="display:block;height:100%;width:0;background:#5b8def;transition:width .25s"></i></div>' +
+      '<div id="batchLog" style="max-height:40vh;overflow:auto;font-size:12px;line-height:1.7"></div>' +
+      '<div class="sheet-actions"><button class="btn ghost" id="batchClose" style="display:none">完成</button></div>';
+    $('#sheetMask').classList.add('show');
+    const bc = $('#batchClose');
+    if (bc) bc.onclick = () => { closeSheet(); renderLibrary(); };
+  }
+
+  function updateBatch(k, total, name, msg, p) {
+    const bar = $('#batchBar');
+    if (bar) bar.style.width = Math.round((k / total) * 100) + '%';
+    const cur = $('#batchCur');
+    if (cur) cur.textContent = '进度 ' + k + '/' + total + (name ? '：' + name + (msg ? '（' + msg + '）' : '') : '');
+  }
+
+  function finishBatch(ok, total, log) {
+    const body = $('#batchLog');
+    if (body) body.innerHTML = '<div style="font-weight:700;margin:6px 0">' + ok + ' / ' + total + ' 本导入成功</div>' + log.map((l) => '<div>' + esc(l) + '</div>').join('');
+    const bar = $('#batchBar');
+    if (bar) bar.style.width = '100%';
+    const bc = $('#batchClose');
+    if (bc) bc.style.display = '';
+    toast('导入完成：' + ok + '/' + total + ' 本');
+  }
+
+  async function makeAudioBook(title, source, sentences) {
+    const book = {
+      id: 'mine-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      title: title,
+      titleEn: '',
+      series: '音频绘本',
+      level: '我的',
+      source: 'mine',
+      color: '#5E8CA8',
+      emoji: '🎧',
+      pages: [{ sentences: sentences }],
+      audio: null,
+    };
+    if (source && source.kind === 'blob') {
+      book.audio = await APP.AudioBook.saveLocal('audio:' + book.id, source.blob);
+    } else if (source && source.kind === 'url') {
+      book.audio = { kind: 'url', url: source.url };
+    }
+    if (!book.audio) throw new Error('没有音频可保存');
+    return book;
+  }
+
+  function handleSharedLink(o) {
+    if (!o || !o.url) return;
+    openAudio();
+    const inp = $('#audioUrl');
+    if (inp) inp.value = o.url;
+    if (o.kind === 'pan') {
+      const chip = $('#audioTabs .chip[data-tab="pan"]');
+      if (chip) chip.click();
+      toast('这是网盘分享链接（里面是「链接」不是「文件」）。请先在百度网盘里把音频下载到手机，再用手机文件管理器把它分享给本 App；或在此页点「连接百度网盘」登录后直接浏览。');
+    } else {
+      chooseAudio({ kind: 'url', url: o.url }, o.url.split('/').pop().split('?')[0] || '音频');
+      toast(o.kind === 'audio' ? '已填入音频链接，点「开始转写」即可' : '已填入链接（若不是音频会转写失败）');
+    }
+  }
+
+  Native.onFolderAudios = (list) => { try { showFolderList(list); } catch (e) { toast('读取文件夹失败'); } };
+  Native.onSharedLink = (o) => { try { handleSharedLink(o); } catch (e) {} };
 
   async function renderPanPane(pane) {
     pane.innerHTML = '<div class="muted" id="panState">正在检查网盘配置…</div><div id="panList"></div>';
@@ -1359,6 +1500,7 @@
       $('#panState').innerHTML =
         '<b>用百度网盘 App 直接送过来（推荐，不用配置）</b><br>' +
         '点下面的按钮打开百度网盘 → 找到音频长按 → <b>分享</b> → 选「悦读绘本」→ 回来就能转写。<br>' +
+        '<span class="muted">注意：百度网盘自带的分享面板可能不会列出本 App。若分享菜单里找不到「悦读绘本」，请先把音频<b>下载到手机</b>，再用系统「文件管理」App 把它分享给本 App（或用网盘里的「打开方式 / 其他应用打开」）。</span><br>' +
         '<span class="muted">想直接在 App 里浏览网盘目录，才需要在后端配 AppKey / SecretKey。</span>';
       const b = document.createElement('button');
       b.className = 'btn primary';
@@ -1553,37 +1695,19 @@
       return s;
     });
     const title = ($('#audioTitle').value || '').trim() || defaultMineTitle();
-    const book = {
-      id: 'mine-' + Date.now(),
-      title: title,
-      titleEn: '',
-      series: '音频绘本',
-      level: '我的',
-      source: 'mine',
-      color: '#5E8CA8',
-      emoji: '🎧',
-      pages: [{ sentences: sentences }],
-      audio: null,
-    };
     loading(true, '正在保存音频…');
     try {
-      if (pickedAudio && pickedAudio.kind === 'blob') {
-        book.audio = await APP.AudioBook.saveLocal('audio:' + book.id, pickedAudio.blob);
-      } else if (pickedAudio && pickedAudio.kind === 'url') {
-        book.audio = { kind: 'url', url: pickedAudio.url };
-      }
-      if (!book.audio) throw new Error('没有音频可保存');
+      const book = await makeAudioBook(title, pickedAudio, sentences);
+      Store.addMine(book);
+      closeSheet();
+      const withAudio = sentences.filter((s) => s.a).length;
+      toast('已存成《' + title + '》，' + sentences.length + ' 句（' + withAudio + ' 句有原声）');
+      APP.go('library');
+      renderLibrary();
     } catch (e) {
       loading(false);
-      return toast('音频保存失败：' + (e.message || '本机存储空间可能不足'));
+      toast('保存失败：' + (e.message || '本机存储空间可能不足'));
     }
-    loading(false);
-    Store.addMine(book);
-    closeSheet();
-    const withAudio = sentences.filter((s) => s.a).length;
-    toast('已存成《' + title + '》，' + sentences.length + ' 句（' + withAudio + ' 句有原声）');
-    APP.go('library');
-    renderLibrary();
   }
 
   /* ================= 同步公版 ================= */
@@ -1637,6 +1761,7 @@
     openImport: openImport,
     openAudio: openAudio,
     openAudioFromShare: openAudioFromShare,
+    showFolderList: showFolderList,
     closeSheet: closeSheet,
     syncPublic: syncPublic,
     testApi: testApi,

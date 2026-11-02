@@ -437,6 +437,9 @@
     onPhotos: null,
     onBookFile: null,
     onAudio: null,
+    onSharedLink: null,
+    onFolderAudios: null,
+    onFolderAudio: null,
     onError: null,
     onAutoStop: null,
     onResume: null,
@@ -506,6 +509,21 @@
     },
     onPanApp(via) {
       if (Native.onPanApp) Native.onPanApp(via);
+    },
+    onSharedLink(json) {
+      let o = null;
+      try { o = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { o = null; }
+      if (Native.onSharedLink) Native.onSharedLink(o);
+    },
+    onFolderAudios(json) {
+      let arr = [];
+      try { arr = JSON.parse(String(json || '[]')); } catch (e) { arr = []; }
+      if (Native.onFolderAudios) Native.onFolderAudios(Array.isArray(arr) ? arr : []);
+    },
+    onFolderAudio(json) {
+      let o = null;
+      try { o = typeof json === 'string' ? JSON.parse(json) : json; } catch (e) { o = null; }
+      if (Native.onFolderAudio) Native.onFolderAudio(o);
     },
     onError(msg) {
       if (Native.onError) Native.onError(msg);
@@ -1501,6 +1519,31 @@
     });
   }
 
+  /* ---------------- 选择文件夹（批量导入音频绘本） ---------------- */
+  function pickFolder() {
+    if (!Native.available()) { toast('网页版不支持选文件夹，请用 APK'); return; }
+    try { Android.pickFolder(); }
+    catch (e) { toast('打不开文件夹选择器'); }
+  }
+
+  /** 读取 folderAudios 中第 i 个音频的二进制，返回 { name, blob }（Promise） */
+  function importFolderAudio(i) {
+    return new Promise((resolve, reject) => {
+      if (!Native.available()) return reject(new Error('网页版不支持，请用 APK'));
+      Native.onFolderAudio = (obj) => {
+        Native.onFolderAudio = null;
+        if (obj && obj.error) return reject(new Error(obj.error));
+        if (!obj || !obj.b64) return resolve(null);
+        try {
+          const bytes = new Uint8Array(b64ToBuf(obj.b64));
+          resolve({ name: obj.name || 'audio', blob: new Blob([bytes], { type: obj.mime || 'audio/mpeg' }) });
+        } catch (e) { reject(new Error('读取音频失败')); }
+      };
+      try { Android.importFolderAudio(i); }
+      catch (e) { Native.onFolderAudio = null; reject(e); }
+    });
+  }
+
   /* ---------------- 唤起网盘 App / 系统浏览器 ---------------- */
   function openPanApp() {
     if (!Native.available()) {
@@ -1678,6 +1721,8 @@
   APP.pickPhotos = pickPhotos;
   APP.pickBookFile = pickBookFile;
   APP.pickAudioFile = pickAudioFile;
+  APP.pickFolder = pickFolder;
+  APP.importFolderAudio = importFolderAudio;
   APP.openPanApp = openPanApp;
   APP.openExternal = openExternal;
   APP.fileToB64 = fileToB64;

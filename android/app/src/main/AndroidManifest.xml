@@ -33,11 +33,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 从百度网盘 / 文件管理器 / 微信等 App 分享音频过来，直接进入转写 -->
+            <!-- 从百度网盘 / 文件管理器 / 微信等 App 分享音频过来，直接进入转写。
+                 网盘「分享」出来的是链接(text/plain)或文件(audio/*)，两种都接。 -->
             <intent-filter android:label="导入音频到悦读绘本">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!-- 一次分享多个音频文件（部分文件管理器/网盘支持） -->
+            <intent-filter android:label="批量导入音频到悦读绘本">
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
             <intent-filter android:label="用悦读绘本打开音频">
                 <action android:name="android.intent.action.VIEW" />
