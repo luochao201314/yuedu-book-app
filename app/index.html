@@ -3958,9 +3958,13 @@ window.SEED_BOOKS = [
     const inp = $('#audioUrl');
     if (inp) inp.value = o.url;
     if (o.kind === 'pan') {
+      // 网盘分享出来的是「链接」不是「文件」，App 没法直接拉取（需要提取码 + 转存接口）。
+      // 最实在的作法：把链接丢进系统浏览器，让用户先保存/下载，再用文件管理器把文件分享给本 App；
+      // 想直接在 App 里浏览网盘目录，则需要在后端配 AppKey 后点「连接百度网盘」。
       const chip = $('#audioTabs .chip[data-tab="pan"]');
       if (chip) chip.click();
-      toast('这是网盘分享链接（里面是「链接」不是「文件」）。请先在百度网盘里把音频下载到手机，再用手机文件管理器把它分享给本 App；或在此页点「连接百度网盘」登录后直接浏览。');
+      APP.openExternal(o.url);
+      toast('这是网盘分享链接（不是文件）。已帮你打开，先在网盘里把它下载到手机，再用「文件管理」App 分享给本 App 即可导入；或配好 AppKey 后在此登录网盘直接浏览。');
     } else {
       chooseAudio({ kind: 'url', url: o.url }, o.url.split('/').pop().split('?')[0] || '音频');
       toast(o.kind === 'audio' ? '已填入音频链接，点「开始转写」即可' : '已填入链接（若不是音频会转写失败）');
@@ -3969,6 +3973,43 @@ window.SEED_BOOKS = [
 
   Native.onFolderAudios = (list) => { try { showFolderList(list); } catch (e) { toast('读取文件夹失败'); } };
   Native.onSharedLink = (o) => { try { handleSharedLink(o); } catch (e) {} };
+
+  function copyText(text, btn) {
+    if (!text) { toast('没有可复制的内容'); return; }
+    const done = () => {
+      if (!btn) return;
+      const t = btn.textContent;
+      btn.textContent = '✅ 已复制';
+      setTimeout(() => { btn.textContent = t; }, 1500);
+    };
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+        ta.setAttribute('readonly', '');
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) done(); else toast('复制失败，请长按地址手动复制');
+      } catch (e) { toast('复制失败，请长按地址手动复制'); }
+    };
+    // 1) 原生剪贴板（WebView 里最可靠）
+    try {
+      if (window.Android && Android.copy) { Android.copy(text); done(); return; }
+    } catch (e) {}
+    // 2) 浏览器剪贴板 API（需安全上下文）
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(fallback);
+        return;
+      }
+    } catch (e) {}
+    // 3) 兜底：临时 textarea + execCommand
+    fallback();
+  }
 
   async function renderPanPane(pane) {
     pane.innerHTML = '<div class="muted" id="panState">正在检查网盘配置…</div><div id="panList"></div>';
@@ -4011,21 +4052,56 @@ window.SEED_BOOKS = [
     b2.textContent = '📂 打开网盘 App';
     b2.onclick = () => openPanWithHint();
     $('#panState').appendChild(b2);
+
+    // 回调地址诊断：授权页若报 redirect_uri_mismatch，就是这里这条和百度后台填的不一致
+    // 后端若已升级会直接返回 redirect；旧后端没这个字段时，用当前配置的后端地址本地拼一份兜底，
+    // 这样不用等后端重新部署也能拿到正确的回调地址。
+    let redirect = (cfg && cfg.redirect) || '';
+    let redirectAuto = false;
+    if (!redirect) {
+      try {
+        const b = Api && Api.base ? Api.base() : '';
+        if (b) { redirect = b.replace(/\/+$/, '') + '/api/pan/baidu/callback'; redirectAuto = true; }
+      } catch (e) {}
+    }
+    const tip = document.createElement('div');
+    tip.className = 'muted';
+    tip.style.cssText = 'margin-top:14px;line-height:1.7;font-size:12px';
+    tip.innerHTML =
+      '若点「连接百度网盘」后授权页报 <b>redirect_uri_mismatch</b>（Invalid redirect uri），' +
+      '说明百度开放平台「授权回调页」和下面这条不完全一致（http/https、域名、路径、结尾斜杠都要一致）。' +
+      '把下面这条<b>原样</b>填进去并保存，再重试即可。' +
+      (cfg && cfg.redirectFrom === 'env' ? '<br><span style="color:#c0392b">当前读的是环境变量 BAIDU_PAN_REDIRECT，改环境变量或把它删掉让系统自动推导。</span>' : '') +
+      (redirectAuto ? '<br><span style="color:#7a879b">（后端尚未升级，这条是按当前「后端地址」本地推导的；若你设过 BAIDU_PAN_REDIRECT 环境变量，以那个为准。）</span>' : '');
+    const code = document.createElement('div');
+    code.style.cssText = 'margin:8px 0;padding:9px 10px;border-radius:8px;background:#f2f5fa;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all;color:#22324a;user-select:all';
+    code.textContent = redirect || '(未取到：请先在「我的 → 后端地址」填好后端，或浏览器打开 /api/pan/config 查看)';
+    tip.appendChild(code);
+    if (redirect) {
+      const cp = document.createElement('button');
+      cp.className = 'btn ghost';
+      cp.style.marginTop = '2px';
+      cp.textContent = '📋 复制回调地址';
+      cp.onclick = () => copyText(redirect, cp);
+      tip.appendChild(cp);
+    }
+    $('#panState').appendChild(tip);
   }
 
   /** 唤起百度网盘客户端，并告诉用户接下来怎么把音频送进来 */
   function openPanWithHint() {
     if (!Native.available()) {
-      toast('网页版不支持唤起 App，请在手机上打开');
+      toast('网页版不支持唤起 App，已打开网页版百度网盘');
       APP.openExternal('https://pan.baidu.com');
       return;
     }
     Native.onPanApp = (via) => {
       Native.onPanApp = null;
       if (via === 'web') toast('没检测到百度网盘 App，已打开网页版');
+      else if (via === 'failed') toast('没有可打开百度网盘的方式，请确认已安装或联网');
+      else toast('已唤起百度网盘，在网盘里长按音频 → 分享到「悦读绘本」');
     };
     APP.openPanApp();
-    toast('在网盘里长按音频 → 分享到「悦读绘本」');
   }
 
   async function connectPan(pane, btn) {

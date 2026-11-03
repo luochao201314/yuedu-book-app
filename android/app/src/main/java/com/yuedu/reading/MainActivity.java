@@ -197,7 +197,12 @@ public class MainActivity extends Activity {
         if (uri == null) return;
         String mime = null;
         try { mime = getContentResolver().getType(uri); } catch (Exception ignored) {}
-        if (mime != null && !mime.startsWith("audio") && !mime.contains("mpeg") && !mime.contains("mp4")) return;
+        String name = displayName(uri);
+        // 网盘 / 文件管理器分享出来的音频，content provider 经常把 mime 报成
+        // application/octet-stream，这时用文件名后缀兜底，否则会被静默丢弃（表现为「点了没反应」）。
+        boolean audioMime = mime != null && (mime.startsWith("audio") || mime.contains("mpeg") || mime.contains("mp4"));
+        boolean audioName = isAudioName(name);
+        if (!audioMime && !audioName) return;
         pendingSharedAudio = uri;
         flushSharedAudio();
     }
@@ -650,6 +655,7 @@ public class MainActivity extends Activity {
      */
     private void openPanApp() {
         String via = "none";
+        // 1) 优先直接拉起百度网盘 App（包名）
         try {
             Intent i = getPackageManager().getLaunchIntentForPackage("com.baidu.netdisk");
             if (i != null) {
@@ -658,8 +664,9 @@ public class MainActivity extends Activity {
                 via = "app";
             }
         } catch (Exception ignored) {}
+        // 2) 退而求其次：scheme 唤起（部分机型/版本无包名时可走通）
         if ("none".equals(via)) {
-            for (String s : new String[]{"bdnetdisk://", "baiduyun://"}) {
+            for (String s : new String[]{"baiduyun://", "bdnetdisk://"}) {
                 try {
                     Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(s));
                     i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -669,13 +676,16 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
         }
+        // 3) 兜底：用系统浏览器打开网页版（网页版上若装了 App 会提示「用 App 打开」）
         if ("none".equals(via)) {
             try {
                 Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://pan.baidu.com"));
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(i);
                 via = "web";
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+                via = "failed";
+            }
         }
         js("window.Native.onPanApp(" + JSONObject.quote(via) + ")");
     }
@@ -1031,6 +1041,20 @@ public class MainActivity extends Activity {
             try {
                 Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);
                 if (v != null) v.vibrate(Math.max(5, Math.min(60, ms)));
+            } catch (Exception ignored) {}
+        }
+
+        // WebView 里 navigator.clipboard 常因非安全上下文不可用，给网页一条原生剪贴板通道
+        @JavascriptInterface public void copy(String text) {
+            if (text == null) return;
+            try {
+                runOnUiThread(() -> {
+                    try {
+                        android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("yuedu", text));
+                    } catch (Exception ignored) {}
+                });
             } catch (Exception ignored) {}
         }
 

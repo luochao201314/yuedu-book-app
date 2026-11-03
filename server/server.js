@@ -79,8 +79,7 @@ async function streamAudio(res, req, target, extraHeaders) {
 }
 
 /* 百度网盘：刷新 access_token */
-async function panRefresh(sid) {
-  const s = panSessions.get(sid);
+async function panRefresh(sid) {  const s = panSessions.get(sid);
   if (!s || !s.refreshToken) return null;
   if (!process.env.BAIDU_PAN_APPKEY || !process.env.BAIDU_PAN_SECRET) return null;
   const url = 'https://openapi.baidu.com/oauth/2.0/token?grant_type=refresh_token' +
@@ -95,6 +94,19 @@ async function panRefresh(sid) {
   s.expiresAt = Date.now() + (Number(j.expires_in) || 0) * 1000;
   panSessions.set(sid, s);
   return s.accessToken;
+}
+
+/* OAuth 回调地址：
+ * - 若显式配了 BAIDU_PAN_REDIRECT，则「原样」使用（必须与百度开放平台「授权回调页」一字不差，
+ *   包括 http/https、域名、路径、结尾斜杠；所以这里不做任何规范化，只去掉首尾空白）。
+ * - 否则按反向代理头推导（Render 等平台会带 x-forwarded-*），回退到 Host。
+ * auth / callback 两处必须用同一个结果，否则换 token 也会被百度拒绝。 */
+function panRedirect(req) {
+  const env = process.env.BAIDU_PAN_REDIRECT;
+  if (env && String(env).trim()) return String(env).trim();
+  const proto = (String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'http') ? 'http' : 'https';
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  return proto + '://' + host + '/api/pan/baidu/callback';
 }
 
 
@@ -138,7 +150,8 @@ const server = http.createServer(async (req, res) => {
       asr: !!process.env.AZURE_SPEECH_KEY,
       ocr: !!process.env.OCR_SPACE_KEY,
       pan: !!(process.env.BAIDU_PAN_APPKEY && process.env.BAIDU_PAN_SECRET),
-      ver: 7
+      panRedirect: panRedirect(req),
+      ver: 8
     });
   }
 
@@ -522,6 +535,8 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/api/pan/config') {
     return send(res, 200, {
       baidu: !!(process.env.BAIDU_PAN_APPKEY && process.env.BAIDU_PAN_SECRET),
+      redirect: panRedirect(req),
+      redirectFrom: (process.env.BAIDU_PAN_REDIRECT && String(process.env.BAIDU_PAN_REDIRECT).trim()) ? 'env' : 'auto',
       note: process.env.BAIDU_PAN_APPKEY ? '' : '未配置百度网盘 AppKey/SecretKey'
     });
   }
@@ -530,8 +545,7 @@ const server = http.createServer(async (req, res) => {
     const state = String(u.searchParams.get('state') || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
     if (!state) return send(res, 400, { error: 'state required' });
     if (!process.env.BAIDU_PAN_APPKEY) return send(res, 200, { mock: true, note: '未配置百度网盘 AppKey' });
-    const redirect = process.env.BAIDU_PAN_REDIRECT ||
-      ('https://' + (req.headers.host || '') + '/api/pan/baidu/callback');
+    const redirect = panRedirect(req);
     const url = 'https://openapi.baidu.com/oauth/2.0/authorize?response_type=code' +
       '&client_id=' + encodeURIComponent(process.env.BAIDU_PAN_APPKEY) +
       '&redirect_uri=' + encodeURIComponent(redirect) +
@@ -554,8 +568,7 @@ const server = http.createServer(async (req, res) => {
     };
     if (!code || !state) return back('授权未完成', false);
     try {
-      const redirect = process.env.BAIDU_PAN_REDIRECT ||
-        ('https://' + (req.headers.host || '') + '/api/pan/baidu/callback');
+      const redirect = panRedirect(req);
       const tr = await fetch('https://openapi.baidu.com/oauth/2.0/token?grant_type=authorization_code' +
         '&code=' + encodeURIComponent(code) +
         '&client_id=' + encodeURIComponent(process.env.BAIDU_PAN_APPKEY || '') +
